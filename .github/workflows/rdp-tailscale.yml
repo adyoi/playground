@@ -6,33 +6,25 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 350
+    timeout-minutes: 3600
     defaults:
       run:
         shell: pwsh
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Mengaktifkan fitur Remote Desktop (RDP) di Windows
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
-
-          # Allow multiple RDP sessions
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
-
-          # Membuka port 3389 di Firewall Windows
           netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>nul
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-
-          # Memuat ulang layanan Remote Desktop
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User
         id: create-user
         run: |
-          # Membuat password acak yang kuat & aman
           Add-Type -AssemblyName System.Security
           $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
           $rawPassword = @()
@@ -45,50 +37,67 @@ jobs:
           if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
             Remove-LocalUser -Name "RDP" -Force
           }
-
-          # Mendaftarkan user ke grup Administrator & RDP
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-
-          # Menyimpan output password agar bisa dipanggil nanti
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+          if (-not (Get-LocalUser -Name "RDP")) {
+            Write-Error "User creation failed"
+            exit 1
+          }
 
       - name: Install Tailscale
         run: |
-          Write-Host "Menginstal Tailscale via official script..."
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
+          $installerPath = "$env:TEMP\tailscale-setup.exe"
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          $script = Invoke-WebRequest -Uri "https://tailscale.com/install.ps1" -UseBasicParsing
-          Invoke-Expression $script.Content
-          
-          # Tambahkan Tailscale ke PATH untuk step selanjutnya
-          $env:PATH += ";C:\Program Files\Tailscale"
-          echo "C:\Program Files\Tailscale" >> $env:GITHUB_PATH
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process $installerPath -ArgumentList "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-      - name: Start Tailscale
+      - name: Establish Tailscale Connection
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          if (-not $env:TAILSCALE_AUTH_KEY) {
-            Write-Error "TAILSCALE_AUTH_KEY tidak ditemukan di GitHub Secrets."
+          $tailscalePath = "$env:ProgramFiles\Tailscale\Tailscale.exe"
+          $service = Get-Service -Name Tailscale -ErrorAction SilentlyContinue
+          if ($service.Status -ne 'Running') {
+            Write-Host "Starting Tailscale service..."
+            Start-Service -Name Tailscale
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "=== Tailscale Status ==="
+          & $tailscalePath status 2>&1
+          Write-Host "======================="
+          Write-Host "Connecting to Tailscale..."
+          $tsOutput = & $tailscalePath up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=gh-runner-$env:GITHUB_RUN_ID 2>&1
+          $tsExitCode = $LASTEXITCODE
+          Write-Host "Tailscale up output:"
+          Write-Host $tsOutput
+          Write-Host "Exit code: $tsExitCode"
+          if ($tsExitCode -ne 0) {
+            Write-Error "Tailscale connection failed with exit code $tsExitCode"
             exit 1
           }
-          
-          Write-Host "Memulai Tailscale..."
-          tailscale up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=github-runner-$env:GITHUB_RUN_ID --accept-routes
-          
-          # Tunggu koneksi stabil
-          Start-Sleep -Seconds 10
-          
-          # Dapatkan IP Tailscale
-          $tailscaleIP = tailscale ip -4
-          Write-Host "Tailscale IP: $tailscaleIP"
-          echo "TAILSCALE_IP=$tailscaleIP" >> $env:GITHUB_ENV
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+            $tsIP = & $tailscalePath ip -4
+            if ($tsIP) { break }
+            Start-Sleep -Seconds 5
+            $retries++
+          }
+          if (-not $tsIP) {
+            Write-Error "Tailscale IP not assigned. Exiting."
+            exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "Tailscale IP: $tsIP"
 
       - name: Verify RDP Connectivity
         run: |
-          # Verifikasi apakah port RDP lokal merespons
-          $testResult = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
             Write-Error "TCP connection to RDP port 3389 failed"
             exit 1
@@ -97,21 +106,17 @@ jobs:
 
       - name: Display RDP Access Info
         run: |
-          Write-Host "`n=== RDP ACCESS INFO (TAILSCALE) ==="
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "======================`n"
-          Write-Host "Cara Menyambung Dari Laptop Anda:"
-          Write-Host "1. Install Tailscale di laptop lokal: https://tailscale.com/download"
-          Write-Host "2. Login ke akun Tailscale yang sama (atau tailnet yang sama)"
-          Write-Host "3. Buka Remote Desktop Connection, ketik komputer tujuan:"
-          Write-Host "   $env:TAILSCALE_IP:3389"
-          Write-Host "4. Masukkan username: RDP dan password di atas"
-          Write-Host "======================`n"
-
-          $totalMinutes = 340
-          for ($i = 0; $i -lt $totalMinutes; $i++) {
-            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Tailscale ($env:TAILSCALE_IP)"
-            Start-Sleep -Seconds 60
+          Write-Host "==================`n"
+          Write-Host "Cara Menyambung:"
+          Write-Host "1. Install Tailscale di laptop: https://tailscale.com/download"
+          Write-Host "2. Login ke tailnet yang sama"
+          Write-Host "3. Remote Desktop -> $env:TAILSCALE_IP:3389"
+          Write-Host "4. User: RDP, Password: di atas"
+          while ($true) {
+            Write-Host "[$(Get-Date)] RDP Active via Tailscale ($env:TAILSCALE_IP)"
+            Start-Sleep -Seconds 300
           }

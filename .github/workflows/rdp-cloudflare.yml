@@ -8,6 +8,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   secure-rdp:
     runs-on: windows-latest
@@ -138,3 +141,14 @@ jobs:
             Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Cloudflare Tunnel"
             Start-Sleep -Seconds 60
           }
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        run: |
+          Write-Host "Cleaning up processes..."
+          if ($env:TUNNEL_PROCESS_ID) {
+            try { Stop-Process -Id $env:TUNNEL_PROCESS_ID -Force -ErrorAction SilentlyContinue } catch {}
+          }
+          # Cleanup cloudflared processes
+          Get-Process -Name cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Write-Host "Cleanup completed"

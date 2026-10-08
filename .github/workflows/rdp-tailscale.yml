@@ -8,6 +8,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   secure-rdp:
     runs-on: windows-latest
@@ -138,9 +141,9 @@ jobs:
       - name: Display RDP Access Info
         run: |
           Write-Host "`n=== RDP ACCESS INFO (TAILSCALE) ==="
+          Write-Host "Computer: $env:TAILSCALE_IP:3389"
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           Write-Host "===============================`n"
           Write-Host "Cara Menyambung Dari Laptop Anda:"
           Write-Host "1. Install Tailscale: https://tailscale.com/download"
@@ -161,3 +164,13 @@ jobs:
             Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Tailscale ($env:TAILSCALE_IP)"
             Start-Sleep -Seconds 60
           }
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        run: |
+          Write-Host "Cleaning up Tailscale..."
+          $tailscalePath = "$env:ProgramFiles\Tailscale\Tailscale.exe"
+          if (Test-Path $tailscalePath) {
+            try { & $tailscalePath down --accept-routes 2>&1 } catch {}
+          }
+          Write-Host "Cleanup completed"

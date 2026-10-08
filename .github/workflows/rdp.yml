@@ -1,0 +1,107 @@
+name: Playground RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 350
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          # Mengaktifkan fitur Remote Desktop (RDP) di Windows
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+
+          # Membuka port 3389 di Firewall Windows
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          # Memuat ulang layanan Remote Desktop
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User
+        id: create-user
+        run: |
+          # Membuat password acak yang kuat & aman
+          Add-Type -AssemblyName System.Security
+          $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "RDP" -Force
+          }
+
+          # Mendaftarkan user ke grup Administrator & RDP
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+
+          # Menyimpan output password agar bisa dipanggil nanti
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+
+      - name: Install Cloudflare Tunnel
+        run: |
+          # Membuat direktori isolasi biner cloudflared
+          $tunnelDir = "C:\CloudflareTunnel"
+          if (-not (Test-Path $tunnelDir)) {
+            New-Item -ItemType Directory -Force -Path $tunnelDir | Out-Null
+          }
+          Write-Host "Mengunduh biner standalone cloudflared.exe..."
+          $exePath = "$tunnelDir\cloudflared.exe"
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $exePath
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Gagal mengunduh biner cloudflared!"
+            exit 1
+          }
+          echo "TUNNEL_EXE_PATH=$exePath" >> $env:GITHUB_ENV
+
+      - name: Establish Cloudflare Connection
+        env:
+          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+        run: |
+          if (-not $env:CLOUDFLARE_TUNNEL_TOKEN) {
+            Write-Error "Token Cloudflare kosong. Harap isi CLOUDFLARE_TUNNEL_TOKEN di GitHub Secrets."
+            exit 1
+          }
+          Write-Host "Menjalankan Cloudflare Tunnel di latar belakang..."
+          Start-Process -FilePath $env:TUNNEL_EXE_PATH -ArgumentList "tunnel", "--no-autoupdate", "run", "--token", $env:CLOUDFLARE_TUNNEL_TOKEN -WindowStyle Hidden
+
+          # Memberikan jeda agar jembatan sirkuit Cloudflare tersambung sempurna
+          Start-Sleep -Seconds 15
+
+      - name: Verify RDP Connectivity
+        run: |
+          # Verifikasi apakah port RDP lokal merespons
+          $testResult = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+            Write-Error "TCP connection to RDP port 3389 failed"
+            exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+      - name: Display RDP Access Info
+        run: |
+          Write-Host "`n=== RDP ACCESS INFO ==="
+          Write-Host "Username: RDP"
+          Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "======================`n"
+          Write-Host "Cara Menyambung Dari Laptop Anda:"
+          Write-Host "1. Buka CMD di laptop lokal Anda, jalankan jembatan rute:"
+          Write-Host " cloudflared tunnel access rdp --hostname <NAMA_DOMAIN_TUNNEL_ANDA> --listener 127.0.0.1:33890"
+          Write-Host "2. Buka Remote Desktop Connection di Windows Anda, ketik komputer tujuan:"
+          Write-Host " 127.0.0.1:33890"
+          Write-Host "======================`n"
+
+          $totalMinutes = 340
+          for ($i = 0; $i -lt $totalMinutes; $i++) {
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Cloudflare Tunnel"
+            Start-Sleep -Seconds 60
+          }

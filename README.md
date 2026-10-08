@@ -36,8 +36,12 @@ Repository ini berisi workflow GitHub Actions untuk membuat akses Remote Desktop
 
 1. **Daftar domain gratis di digitalplat.org**
    - Buka https://digitalplat.org/
-   - Pilih domain yang tersedia (contoh: `namaku.digitalplat.org`)
-   - Daftar & verifikasi email
+   - Pilih menu **Domain** → submenu **Register Domains**
+   - Pada halaman **Domain Registration**, pilih **DigitalPlat One** → klik **Choose a DigitalPlat extension**
+   - Scroll ke bagian bawah
+   - Ketik domain yang diinginkan, pilih ekstensi domain gratis yang disediakan → klik **Check Availability**
+   - Jika tersedia, centang kebijakan → klik **Buat Domain**
+   - Verifikasi email
    - Catat nameserver Cloudflare yang diberikan (biasanya 2 nameserver: `xxx.ns.cloudflare.com`, `yyy.ns.cloudflare.com`)
 
 2. **Tambahkan domain ke Cloudflare**

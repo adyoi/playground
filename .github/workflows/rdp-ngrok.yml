@@ -1,0 +1,81 @@
+name: playground
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" -Value 0 -Force
+
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "UserAuthentication" -Value 1 -Force
+
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "SecurityLayer" -Value 1 -Force
+
+          Remove-NetFirewallRule -DisplayName "RDP-Gate" -ErrorAction SilentlyContinue
+          New-NetFirewallRule -DisplayName "RDP-Gate" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User
+        id: create-user
+        run: |
+          \$password = "MantapBener_2026!"
+          securePass = ConvertTo-SecureString password -AsPlainText -Force
+
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name "RDP" -Force
+          }
+
+          New-LocalUser -Name "RDP" -Password \$securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+
+          echo "RDP_PASSWORD=password" >> env:GITHUB_OUTPUT
+
+      - name: Install & Run Ngrok
+        env:
+          NGROK_AUTH_TOKEN: \${{ secrets.NGROK_AUTH_TOKEN }}
+        run: |
+          if (-not \$env:NGROK_AUTH_TOKEN) {
+              Write-Error "Token Ngrok kosong. Harap isi NGROK_AUTH_TOKEN di GitHub Secrets Anda!"
+              exit 1
+          }
+          
+          Write-Host "Mengunduh Ngrok..."
+          Invoke-WebRequest -Uri "https://equinox.io" -OutFile "ngrok.zip"
+          Expand-Archive -Path "ngrok.zip" -DestinationPath "."
+          
+          Write-Host "Mengonfigurasi Token..."
+          ./ngrok.exe config add-authtoken \$env:NGROK_AUTH_TOKEN
+          
+          Write-Host "Menjalankan Ngrok Tunnel ke Port RDP..."
+          Start-Process -FilePath "./ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden
+          Start-Sleep -Seconds 12
+
+      - name: Display RDP Access Info
+        run: |
+          Write-Host "`n=========================================="
+          Write-Host " RDP CONFIGURATION SUCCESSFUL (NGROK)"
+          Write-Host " Username           : RDP"
+          Write-Host " Password           : MantapBener_2026!"
+          Write-Host "=========================================="
+          Write-Host " CARA MENYAMBUNG DARI LAPTOP ANDA:"
+          Write-Host " 1. Buka log 'Install & Run Ngrok' di atas."
+          Write-Host " 2. Cari alamat URL publik TCP Anda yang berformat seperti: 0.tcp.ngrok.io:XXXXX"
+          Write-Host " 3. Buka Remote Desktop Connection di Windows Anda, lalu masukkan alamat tersebut."
+          Write-Host "==========================================`n"
+
+          \$totalMinutes = 340
+          for (i = 0; i -lt totalMinutes; i++) {
+              Write-Host "Status RDP via Ngrok: Aktif."
+              Start-Sleep -Seconds 60
+          }

@@ -18,6 +18,13 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
 
+          # Allow multiple RDP sessions (fix error 0x708)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
+
+          # Disable NLA for compatibility (optional, but helps with tunnel)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+
           # Membuka port 3389 di Firewall Windows
           netsh advfirewall firewall delete rule name="RDP-Cloudflare" 2>nul
           netsh advfirewall firewall add rule name="RDP-Cloudflare" dir=in action=allow protocol=TCP localport=3389

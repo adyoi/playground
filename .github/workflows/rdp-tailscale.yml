@@ -56,15 +56,12 @@ jobs:
 
       - name: Install Tailscale
         run: |
-          Write-Host "Mengunduh Tailscale..."
-          $installerPath = "$env:TEMP\tailscale-installer.msi"
+          Write-Host "Menginstal Tailscale via official script..."
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $installerPath
+          $script = Invoke-WebRequest -Uri "https://tailscale.com/install.ps1" -UseBasicParsing
+          Invoke-Expression $script.Content
           
-          Write-Host "Menginstal Tailscale..."
-          Start-Process -FilePath $installerPath -ArgumentList "/quiet" -Wait
-          
-          # Tambahkan Tailscale ke PATH
+          # Tambahkan Tailscale ke PATH untuk step selanjutnya
           $env:PATH += ";C:\Program Files\Tailscale"
           echo "C:\Program Files\Tailscale" >> $env:GITHUB_PATH
 

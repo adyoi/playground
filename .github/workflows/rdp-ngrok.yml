@@ -118,12 +118,18 @@ jobs:
             Write-Host "Computer: $publicUrl"
             Write-Host "Username: RDP"
             Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+            Write-Host "================"
+            Write-Host "Cara Menyambung:"
+            Write-Host "1. Buka Remote Desktop Connection (mstsc), masukan info di atas"
             Write-Host "==============================`n"
           } else {
             Write-Host "`n=== RDP ACCESS INFO (NGROK) ==="
             Write-Host "Computer: (cek log step 'Install & Run Ngrok' untuk URL 0.tcp.ngrok.io:XXXXX)"
             Write-Host "Username: RDP"
             Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+            Write-Host "================"
+            Write-Host "Cara Menyambung:"
+            Write-Host "1. Buka Remote Desktop Connection (mstsc), masukan info di atas"
             Write-Host "==============================`n"
           }
 

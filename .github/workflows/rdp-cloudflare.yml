@@ -129,21 +129,21 @@ jobs:
 
       - name: Display RDP Access Info
         run: |
-          Write-Host "`n=== RDP ACCESS INFO ==="
+          Write-Host "`n=== RDP ACCESS INFO (CLOUDFLARE) ==="
+          Write-Host "Computer: localhost:3389"
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
-          Write-Host "======================`n"
+          Write-Host "======================"
           Write-Host "Cara Menyambung Dari Laptop Anda:"
           Write-Host "1. Install cloudflared di laptop lokal Anda"
           $hostname = "${{ github.event.inputs.tunnel_hostname }}"
           if ($hostname -ne "") {
             Write-Host "2. Jalankan: cloudflared access tcp --hostname $hostname --url rdp://localhost:3389"
-            Write-Host "3. Buka Remote Desktop Connection, ketik: localhost:3389"
           } else {
             Write-Host "2. Jalankan: cloudflared access tcp --hostname <NAMA_DOMAIN_TUNNEL_ANDA> --url rdp://localhost:3389"
-            Write-Host "3. Buka Remote Desktop Connection, ketik: localhost:3389"
           }
-          Write-Host "======================`n"
+          Write-Host "3. Buka Remote Desktop Connection (mstsc), masukan info di atas"
+          Write-Host "====================================`n"
 
           $totalMinutes = 340
           for ($i = 0; $i -lt $totalMinutes; $i++) {

@@ -62,23 +62,24 @@ Repository ini berisi workflow GitHub Actions untuk membuat akses Remote Desktop
 3. Pilih **Cloudflared** → Beri nama (misal: `github-rdp`)
 4. **Save tunnel**
 
-#### B. Konfigurasi Public Hostname
-1. Di tunnel yang baru dibuat, tab **Public Hostname**
-2. **Add a public hostname**:
-   - Subdomain: `rdp` (atau bebas)
-   - Domain: pilih domain digitalplat.org Anda
-   - Type: `TCP`
-   - URL: `rdp://localhost:3389`
-3. **Save hostname**
+#### C. Konfigurasi Public Hostname (TCP)
+1. Di halaman edit tunnel tersebut, lihat bagian atas dan klik tab **Public Hostname**.
+2. Klik tombol **Add a public hostname**.
+3. Isi kolom yang tersedia dengan data berikut:
+   - **Subdomain**: `rdp`
+   - **Domain**: Pilih domain digitalplat.org Anda dari menu drop-down
+   - **Type** (di bawah kolom Service): pilih **TCP**
+   - **URL**: `rdp://localhost:3389`
+4. Klik **Save hostname**
 
-#### C. Ambil Tunnel Token
+#### D. Ambil Tunnel Token
 1. Di detail tunnel, klik **Configure** → **Token**
 2. Copy **Tunnel Token** (format: `eyJh...`)
 
 ### Setup GitHub Secrets
 | Secret Name | Value | Deskripsi |
 |-------------|-------|-----------|
-| `CLOUDFLARE_TUNNEL_TOKEN` | Token dari langkah C | Untuk autentikasi tunnel |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Token dari langkah D | Untuk autentikasi tunnel |
 
 ### Menjalankan Workflow
 1. Buka tab **Actions** di repository GitHub

@@ -31,7 +31,32 @@ Repository ini berisi workflow GitHub Actions untuk membuat akses Remote Desktop
 
 ### Persiapan (Sekali Saja)
 
-#### A. Buat Cloudflare Tunnel
+#### A. Dapatkan Domain Gratis (digitalplat.org) + Setup Cloudflare
+> **Catatan**: Cloudflare Tunnel memerlukan domain sendiri. Jika belum punya, bisa dapatkan gratis via [digitalplat.org](https://digitalplat.org/) lalu kelola DNS di Cloudflare.
+
+1. **Daftar domain gratis di digitalplat.org**
+   - Buka https://digitalplat.org/
+   - Pilih domain yang tersedia (contoh: `namaku.digitalplat.org`)
+   - Daftar & verifikasi email
+   - Catat nameserver Cloudflare yang diberikan (biasanya 2 nameserver: `xxx.ns.cloudflare.com`, `yyy.ns.cloudflare.com`)
+
+2. **Tambahkan domain ke Cloudflare**
+   - Login ke [Cloudflare Dashboard](https://dash.cloudflare.com/)
+   - Klik **Add a site** → Masukkan domain digitalplat.org Anda → **Continue**
+   - Pilih plan **Free** → **Continue**
+   - Cloudflare akan scan DNS record → **Continue**
+
+3. **Ganti Nameserver di digitalplat.org**
+   - Di Cloudflare, catat 2 nameserver (contoh: `alice.ns.cloudflare.com`, `bob.ns.cloudflare.com`)
+   - Login ke digitalplat.org → Kelola Domain → **Ganti Nameserver**
+   - Masukkan 2 nameserver Cloudflare → **Simpan**
+   - Tunggu propagasi DNS (biasanya 5-30 menit, cek di Cloudflare status jadi **Active**)
+
+4. **Verifikasi domain aktif di Cloudflare**
+   - Di Cloudflare Dashboard, domain harus status **Active**
+   - Tab **DNS** → **Records** → pastikan sudah ada record NS ke Cloudflare
+
+#### B. Buat Cloudflare Tunnel
 1. Login ke [Cloudflare Zero Trust Dashboard](https://one.dash.cloudflare.com/)
 2. Pilih **Networks** → **Tunnels** → **Create a tunnel**
 3. Pilih **Cloudflared** → Beri nama (misal: `github-rdp`)
@@ -41,7 +66,7 @@ Repository ini berisi workflow GitHub Actions untuk membuat akses Remote Desktop
 1. Di tunnel yang baru dibuat, tab **Public Hostname**
 2. **Add a public hostname**:
    - Subdomain: `rdp` (atau bebas)
-   - Domain: pilih domain Anda
+   - Domain: pilih domain digitalplat.org Anda
    - Type: `TCP`
    - URL: `rdp://localhost:3389`
 3. **Save hostname**
@@ -57,8 +82,8 @@ Repository ini berisi workflow GitHub Actions untuk membuat akses Remote Desktop
 
 ### Menjalankan Workflow
 1. Buka tab **Actions** di repository GitHub
-2. Pilih **"Playground RDP"** workflow
-3. Klik **Run workflow** → **Run workflow**
+2. Pilih **"Playground RDP (Cloudflare Tunnel)"** workflow
+3. Klik **Run workflow** → isi **Tunnel hostname** (opsional, contoh: `rdp.namaku.digitalplat.org`) → **Run workflow**
 4. Tunggu sampai step "Display RDP Access Info" muncul
 5. Copy **Password** dari log
 
@@ -72,7 +97,7 @@ Repository ini berisi workflow GitHub Actions untuk membuat akses Remote Desktop
 # Linux: lihat https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
 
 # Jalankan tunnel lokal (ganti dengan hostname Anda)
-cloudflared access tcp --hostname rdp.yourdomain.com --url rdp://localhost:3389
+cloudflared access tcp --hostname rdp.namaku.digitalplat.org --url rdp://localhost:3389
 ```
 
 #### Remote Desktop Connection

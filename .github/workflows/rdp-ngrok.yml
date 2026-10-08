@@ -92,7 +92,6 @@ jobs:
             $tcpTunnel = $apiResponse.tunnels | Where-Object { $_.proto -eq "tcp" } | Select-Object -First 1
             if ($tcpTunnel) {
               $publicUrl = $tcpTunnel.public_url -replace "tcp://", ""
-              Write-Host "NGROK_PUBLIC_URL=$publicUrl"
               echo "NGROK_PUBLIC_URL=$publicUrl" >> $env:GITHUB_ENV
             }
           } catch {

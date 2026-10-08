@@ -173,6 +173,6 @@ jobs:
           Write-Host "Cleaning up Tailscale..."
           $tailscalePath = "$env:ProgramFiles\Tailscale\Tailscale.exe"
           if (Test-Path $tailscalePath) {
-            try { & $tailscalePath down --accept-routes 2>&1 } catch {}
+            try { & $tailscalePath down 2>&1 } catch {}
           }
           Write-Host "Cleanup completed"

@@ -134,7 +134,7 @@ jobs:
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
           Write-Host "======================"
-          Write-Host "Cara Menyambung Dari Laptop Anda:"
+          Write-Host "Cara Menyambung dari Devices Anda:"
           Write-Host "1. Install cloudflared di laptop lokal Anda"
           $hostname = "${{ github.event.inputs.tunnel_hostname }}"
           if ($hostname -ne "") {

@@ -119,7 +119,7 @@ jobs:
             Write-Host "Username: RDP"
             Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
             Write-Host "================"
-            Write-Host "Cara Menyambung:"
+            Write-Host "Cara Menyambung dari Devices Anda:"
             Write-Host "1. Buka Remote Desktop Connection (mstsc), masukan info di atas"
             Write-Host "==============================`n"
           } else {
@@ -128,7 +128,7 @@ jobs:
             Write-Host "Username: RDP"
             Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
             Write-Host "================"
-            Write-Host "Cara Menyambung:"
+            Write-Host "Cara Menyambung dari Devices Anda:"
             Write-Host "1. Buka Remote Desktop Connection (mstsc), masukan info di atas"
             Write-Host "==============================`n"
           }

@@ -101,24 +101,19 @@ jobs:
       - name: Display RDP Access Info
         run: |
           $publicUrl = $env:NGROK_PUBLIC_URL
-          Write-Host "`n=== RDP ACCESS INFO (NGROK) ==="
-          Write-Host "Username: RDP"
-          Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
           if ($publicUrl) {
-            Write-Host "Address: $publicUrl"
-            Write-Host "`nCara Menyambung:"
-            Write-Host "1. Buka Remote Desktop Connection (mstsc)"
-            Write-Host "2. Computer: $publicUrl"
-            Write-Host "3. Username: RDP"
-            Write-Host "4. Password: (lihat di atas)"
+            Write-Host "`n=== RDP ACCESS INFO (NGROK) ==="
+            Write-Host "Computer: $publicUrl"
+            Write-Host "Username: RDP"
+            Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+            Write-Host "==============================`n"
           } else {
-            Write-Host "Address: (cek log step 'Install & Run Ngrok' untuk URL tcp://0.tcp.ngrok.io:XXXXX)"
-            Write-Host "`nCara Menyambung:"
-            Write-Host "1. Buka log step 'Install & Run Ngrok' di atas"
-            Write-Host "2. Cari baris: 'started tunnel' atau 'url=tcp://0.tcp.ngrok.io:XXXXX'"
-            Write-Host "3. Gunakan address tersebut di Remote Desktop Connection"
+            Write-Host "`n=== RDP ACCESS INFO (NGROK) ==="
+            Write-Host "Computer: (cek log step 'Install & Run Ngrok' untuk URL 0.tcp.ngrok.io:XXXXX)"
+            Write-Host "Username: RDP"
+            Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+            Write-Host "==============================`n"
           }
-          Write-Host "==============================`n"
 
           $totalMinutes = 340
           for ($i = 0; $i -lt $totalMinutes; $i++) {

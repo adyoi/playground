@@ -7,13 +7,22 @@ on:
         description: 'Custom RDP password (optional, auto-generated if empty)'
         required: false
         type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
 
 permissions:
   contents: read
 
 jobs:
   secure-rdp:
-    runs-on: windows-latest
+    runs-on: ${{ github.event.inputs.os }}
     timeout-minutes: 3600
     defaults:
       run:

@@ -7,13 +7,22 @@ on:
         description: 'Cloudflare Tunnel hostname (e.g., rdp.example.com) - optional, for display only'
         required: false
         type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
 
 permissions:
   contents: read
 
 jobs:
   secure-rdp:
-    runs-on: windows-latest
+    runs-on: ${{ github.event.inputs.os }}
     timeout-minutes: 350
     defaults:
       run:

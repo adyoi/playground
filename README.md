@@ -256,12 +256,51 @@ Workflow sudah buka firewall port 3389. Jika masih gagal:
 ### Arsitektur Koneksi
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Client     │────▶│   Tunnel/VPN     │────▶│ GitHub Runner   │
-│ (Your PC)   │     │ (Cloudflare/     │     │ (Windows)       │
-│             │     │  Ngrok/Tailscale)│     │ Port 3389 (RDP) │
-└─────────────┘     └──────────────────┘     └─────────────────┘
+┌─────────────┐     ┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
+│  Client     │────▶│   Tunnel/VPN        │────▶│  GitHub Actions      │     │   Runner OS         │
+│ (Your PC)   │     │ (Cloudflare/        │     │  Workflow Runs       │     │  (pilihan:         │
+│             │     │  Ngrok/Tailscale)   │     │  1. Setup RDP        │     │   windows-latest/  │
+│             │     │                     │     │  2. Start Tunnel     │     │   ubuntu-latest/   │
+└─────────────┘     └─────────────────────┘     └──────────────────────┘     │   macos-latest)    │
+                                                                              └─────────────────────┘
 ```
+
+**Alur lengkap:**
+1. **Workflow dijalankan** → GitHub menyediakan runner (VM)
+2. **Setup RDP/SSH** → Enable RDP (Windows) atau xrdp/SSH (Linux/macOS), buat user, buka firewall
+3. **Start Tunnel Service** → Cloudflare Tunnel / Ngrok / Tailscale
+4. **Client connect** → Via tunnel ke runner:3389 (RDP) atau port SSH
+
+### Pilih OS Runner (Workflow Input)
+
+Semua workflow sudah menyertakan input `os` untuk memilih OS runner:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest      # Windows Server 2025 (default, RDP native)
+          - ubuntu-latest       # Ubuntu Linux (butuh xrdp untuk RDP)
+          - macos-latest        # macOS (butuh Screen Sharing/SSH)
+        default: 'windows-latest'
+```
+
+**Runner images available (GitHub-hosted):**
+| Image | OS | Catatan |
+|-------|-----|---------|
+| `windows-latest` | Windows Server 2025 | RDP native, recommended |
+| `ubuntu-latest` | Ubuntu Linux | Butuh install xrdp untuk RDP |
+| `macos-latest` | macOS (latest) | Screen Sharing (VNC) atau SSH |
+
+> ⚠️ **Catatan**: 
+> - Runner Windows hanya tersedia untuk repositori **private** atau **public** dengan GitHub Actions enabled
+> - Untuk repo public gratis, gunakan `ubuntu-latest` + xrdp (Linux)
+> - macOS runner memiliki batasan concurrent jobs lebih ketat
 
 ### Resource Limits GitHub Actions
 - **Windows runners**: 4-core, 16GB RAM, 50GB disk

@@ -16,7 +16,7 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
 
           # Membuka port 3389 di Firewall Windows
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>nul
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
 
           # Memuat ulang layanan Remote Desktop

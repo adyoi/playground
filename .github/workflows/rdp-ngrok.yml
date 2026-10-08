@@ -1,81 +1,128 @@
-name: playground
+name: Playground RDP (Ngrok TCP)
 
 on:
   workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
 
 jobs:
   secure-rdp:
     runs-on: windows-latest
     timeout-minutes: 350
-
+    defaults:
+      run:
+        shell: pwsh
     steps:
+      - name: 📋 Display Configuration Info
+        run: |
+          Write-Host "=== PLAYGROUND RDP - NGROK TCP ==="
+          Write-Host "Repository: ${{ github.repository }}"
+          Write-Host "Run ID: ${{ github.run_id }}"
+          Write-Host "Triggered by: ${{ github.actor }}"
+          Write-Host "====================================="
+
       - name: Configure Core RDP Settings
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name "fDenyTSConnections" -Value 0 -Force
-
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "UserAuthentication" -Value 1 -Force
-
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "SecurityLayer" -Value 1 -Force
-
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
           Remove-NetFirewallRule -DisplayName "RDP-Gate" -ErrorAction SilentlyContinue
           New-NetFirewallRule -DisplayName "RDP-Gate" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389
-
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User
         id: create-user
         run: |
-          \$password = "MantapBener_2026!"
-          securePass = ConvertTo-SecureString password -AsPlainText -Force
-
-          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
-              Remove-LocalUser -Name "RDP" -Force
+          $customPass = "${{ github.event.inputs.custom_password }}"
+          if ($customPass -ne "") {
+            $password = $customPass
+          } else {
+            Add-Type -AssemblyName System.Security
+            $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+            $rawPassword = @()
+            $rawPassword += $charSet.Upper | Get-Random -Count 4
+            $rawPassword += $charSet.Lower | Get-Random -Count 4
+            $rawPassword += $charSet.Number | Get-Random -Count 4
+            $rawPassword += $charSet.Special | Get-Random -Count 4
+            $password = -join ($rawPassword | Sort-Object { Get-Random })
           }
-
-          New-LocalUser -Name "RDP" -Password \$securePass -AccountNeverExpires
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "RDP" -Force
+          }
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-
-          echo "RDP_PASSWORD=password" >> env:GITHUB_OUTPUT
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+          if (-not (Get-LocalUser -Name "RDP")) {
+            Write-Error "User creation failed"
+            exit 1
+          }
 
       - name: Install & Run Ngrok
         env:
-          NGROK_AUTH_TOKEN: \${{ secrets.NGROK_AUTH_TOKEN }}
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
-          if (-not \$env:NGROK_AUTH_TOKEN) {
-              Write-Error "Token Ngrok kosong. Harap isi NGROK_AUTH_TOKEN di GitHub Secrets Anda!"
-              exit 1
+          if (-not $env:NGROK_AUTH_TOKEN) {
+            Write-Error "Token Ngrok kosong. Harap isi NGROK_AUTH_TOKEN di GitHub Secrets Anda!"
+            exit 1
           }
-          
+
           Write-Host "Mengunduh Ngrok..."
-          Invoke-WebRequest -Uri "https://equinox.io" -OutFile "ngrok.zip"
-          Expand-Archive -Path "ngrok.zip" -DestinationPath "."
-          
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive -Path "ngrok.zip" -DestinationPath "." -Force
+
           Write-Host "Mengonfigurasi Token..."
-          ./ngrok.exe config add-authtoken \$env:NGROK_AUTH_TOKEN
-          
+          ./ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
+
           Write-Host "Menjalankan Ngrok Tunnel ke Port RDP..."
-          Start-Process -FilePath "./ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden
-          Start-Sleep -Seconds 12
+          $ngrokProcess = Start-Process -FilePath "./ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden -PassThru
+          echo "NGROK_PID=$($ngrokProcess.Id)" >> $env:GITHUB_ENV
+          Start-Sleep -Seconds 15
+
+          # Ambil public URL dari ngrok API
+          try {
+            $apiResponse = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
+            $tcpTunnel = $apiResponse.tunnels | Where-Object { $_.proto -eq "tcp" } | Select-Object -First 1
+            if ($tcpTunnel) {
+              $publicUrl = $tcpTunnel.public_url -replace "tcp://", ""
+              Write-Host "NGROK_PUBLIC_URL=$publicUrl"
+              echo "NGROK_PUBLIC_URL=$publicUrl" >> $env:GITHUB_ENV
+            }
+          } catch {
+            Write-Warning "Gagal ambil public URL dari ngrok API. Cek log manual."
+          }
 
       - name: Display RDP Access Info
         run: |
-          Write-Host "`n=========================================="
-          Write-Host " RDP CONFIGURATION SUCCESSFUL (NGROK)"
-          Write-Host " Username           : RDP"
-          Write-Host " Password           : MantapBener_2026!"
-          Write-Host "=========================================="
-          Write-Host " CARA MENYAMBUNG DARI LAPTOP ANDA:"
-          Write-Host " 1. Buka log 'Install & Run Ngrok' di atas."
-          Write-Host " 2. Cari alamat URL publik TCP Anda yang berformat seperti: 0.tcp.ngrok.io:XXXXX"
-          Write-Host " 3. Buka Remote Desktop Connection di Windows Anda, lalu masukkan alamat tersebut."
-          Write-Host "==========================================`n"
+          $publicUrl = $env:NGROK_PUBLIC_URL
+          Write-Host "`n=== RDP ACCESS INFO (NGROK) ==="
+          Write-Host "Username: RDP"
+          Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          if ($publicUrl) {
+            Write-Host "Address: $publicUrl"
+            Write-Host "`nCara Menyambung:"
+            Write-Host "1. Buka Remote Desktop Connection (mstsc)"
+            Write-Host "2. Computer: $publicUrl"
+            Write-Host "3. Username: RDP"
+            Write-Host "4. Password: (lihat di atas)"
+          } else {
+            Write-Host "Address: (cek log step 'Install & Run Ngrok' untuk URL tcp://0.tcp.ngrok.io:XXXXX)"
+            Write-Host "`nCara Menyambung:"
+            Write-Host "1. Buka log step 'Install & Run Ngrok' di atas"
+            Write-Host "2. Cari baris: 'started tunnel' atau 'url=tcp://0.tcp.ngrok.io:XXXXX'"
+            Write-Host "3. Gunakan address tersebut di Remote Desktop Connection"
+          }
+          Write-Host "==============================`n"
 
-          \$totalMinutes = 340
-          for (i = 0; i -lt totalMinutes; i++) {
-              Write-Host "Status RDP via Ngrok: Aktif."
-              Start-Sleep -Seconds 60
+          $totalMinutes = 340
+          for ($i = 0; $i -lt $totalMinutes; $i++) {
+            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Ngrok"
+            Start-Sleep -Seconds 60
           }

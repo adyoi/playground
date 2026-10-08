@@ -1,7 +1,12 @@
-name: Playground RDP
+name: Playground RDP (Cloudflare Tunnel)
 
 on:
   workflow_dispatch:
+    inputs:
+      tunnel_hostname:
+        description: 'Cloudflare Tunnel hostname (e.g., rdp.example.com) - optional, for display only'
+        required: false
+        type: string
 
 jobs:
   secure-rdp:
@@ -11,6 +16,17 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - name: 📋 Display Configuration Info
+        run: |
+          Write-Host "=== PLAYGROUND RDP - CLOUDFLARE TUNNEL ==="
+          Write-Host "Repository: ${{ github.repository }}"
+          Write-Host "Run ID: ${{ github.run_id }}"
+          Write-Host "Triggered by: ${{ github.actor }}"
+          if ("${{ github.event.inputs.tunnel_hostname }}" -ne "") {
+            Write-Host "Tunnel Hostname: ${{ github.event.inputs.tunnel_hostname }}"
+          }
+          Write-Host "================================================"
+
       - name: Configure Core RDP Settings
         run: |
           # Mengaktifkan fitur Remote Desktop (RDP) di Windows
@@ -107,8 +123,14 @@ jobs:
           Write-Host "======================`n"
           Write-Host "Cara Menyambung Dari Laptop Anda:"
           Write-Host "1. Install cloudflared di laptop lokal Anda"
-          Write-Host "2. Jalankan: cloudflared access tcp --hostname <NAMA_DOMAIN_TUNNEL_ANDA> --url rdp://localhost:3389"
-          Write-Host "3. Buka Remote Desktop Connection, ketik: localhost:3389"
+          $hostname = "${{ github.event.inputs.tunnel_hostname }}"
+          if ($hostname -ne "") {
+            Write-Host "2. Jalankan: cloudflared access tcp --hostname $hostname --url rdp://localhost:3389"
+            Write-Host "3. Buka Remote Desktop Connection, ketik: localhost:3389"
+          } else {
+            Write-Host "2. Jalankan: cloudflared access tcp --hostname <NAMA_DOMAIN_TUNNEL_ANDA> --url rdp://localhost:3389"
+            Write-Host "3. Buka Remote Desktop Connection, ketik: localhost:3389"
+          }
           Write-Host "======================`n"
 
           $totalMinutes = 340

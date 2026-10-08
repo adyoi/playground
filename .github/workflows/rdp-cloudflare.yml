@@ -30,17 +30,18 @@ jobs:
     steps:
       - name: 📋 Display Configuration Info
         run: |
-          Write-Host "=== PLAYGROUND RDP - CLOUDFLARE TUNNEL ==="
-          Write-Host "Repository: ${{ github.repository }}"
-          Write-Host "Run ID: ${{ github.run_id }}"
-          Write-Host "Triggered by: ${{ github.actor }}"
+          Write-Host "🔧 === PLAYGROUND RDP - CLOUDFLARE TUNNEL === 🔧"
+          Write-Host "📦 Repository: ${{ github.repository }}"
+          Write-Host "🆔 Run ID: ${{ github.run_id }}"
+          Write-Host "👤 Triggered by: ${{ github.actor }}"
           if ("${{ github.event.inputs.tunnel_hostname }}" -ne "") {
-            Write-Host "Tunnel Hostname: ${{ github.event.inputs.tunnel_hostname }}"
+            Write-Host "🌐 Tunnel Hostname: ${{ github.event.inputs.tunnel_hostname }}"
           }
           Write-Host "================================================"
 
-      - name: Configure Core RDP Settings
+      - name: ⚙️ Configure Core RDP Settings
         run: |
+          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
           # Mengaktifkan fitur Remote Desktop (RDP) di Windows
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
@@ -59,10 +60,12 @@ jobs:
 
           # Memuat ulang layanan Remote Desktop
           Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP & Firewall configured"
 
-      - name: Create RDP User
+      - name: 👤 Create RDP User
         id: create-user
         run: |
+          Write-Host "👤 Creating RDP user..."
           # Membuat password acak yang kuat & aman
           Add-Type -AssemblyName System.Security
           $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
@@ -84,80 +87,85 @@ jobs:
 
           # Menyimpan output password agar bisa dipanggil nanti
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+          Write-Host "✅ RDP user created with secure password"
 
-      - name: Install Cloudflare Tunnel
+      - name: ☁️ Install Cloudflare Tunnel
         run: |
+          Write-Host "☁️ Installing Cloudflare Tunnel (cloudflared)..."
           # Membuat direktori isolasi biner cloudflared
           $tunnelDir = "C:\CloudflareTunnel"
           if (-not (Test-Path $tunnelDir)) {
             New-Item -ItemType Directory -Force -Path $tunnelDir | Out-Null
           }
-          Write-Host "Mengunduh biner standalone cloudflared.exe..."
+          Write-Host "📥 Downloading cloudflared.exe..."
           $exePath = "$tunnelDir\cloudflared.exe"
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $exePath
           if (-not (Test-Path $exePath)) {
-            Write-Error "Gagal mengunduh biner cloudflared!"
+            Write-Error "❌ Gagal mengunduh biner cloudflared!"
             exit 1
           }
           echo "TUNNEL_EXE_PATH=$exePath" >> $env:GITHUB_ENV
+          Write-Host "✅ Cloudflare Tunnel installed"
 
-      - name: Establish Cloudflare Connection
+      - name: 🔗 Establish Cloudflare Connection
         env:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
           if (-not $env:CLOUDFLARE_TUNNEL_TOKEN) {
-            Write-Error "Token Cloudflare kosong. Harap isi CLOUDFLARE_TUNNEL_TOKEN di GitHub Secrets."
+            Write-Error "❌ Token Cloudflare kosong. Harap isi CLOUDFLARE_TUNNEL_TOKEN di GitHub Secrets."
             exit 1
           }
-          Write-Host "Menjalankan Cloudflare Tunnel di latar belakang..."
+          Write-Host "🔗 Connecting to Cloudflare Tunnel..."
           $process = Start-Process -FilePath $env:TUNNEL_EXE_PATH -ArgumentList "tunnel", "--no-autoupdate", "run", "--token", $env:CLOUDFLARE_TUNNEL_TOKEN -WindowStyle Hidden -PassThru
           echo "TUNNEL_PROCESS_ID=$($process.Id)" >> $env:GITHUB_ENV
 
           # Memberikan jeda agar jembatan sirkuit Cloudflare tersambung sempurna
           Start-Sleep -Seconds 15
+          Write-Host "✅ Cloudflare Tunnel connected"
 
-      - name: Verify RDP Connectivity
+      - name: ✅ Verify RDP Connectivity
         run: |
+          Write-Host "🔍 Verifying RDP connectivity..."
           # Verifikasi apakah port RDP lokal merespons
           $testResult = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
-            Write-Error "TCP connection to RDP port 3389 failed"
+            Write-Error "❌ TCP connection to RDP port 3389 failed"
             exit 1
           }
-          Write-Host "TCP connectivity successful!"
+          Write-Host "✅ TCP connectivity successful!"
 
-      - name: Display RDP Access Info
+      - name: 📋 Display RDP Access Info
         run: |
-          Write-Host "`n=== RDP ACCESS INFO (CLOUDFLARE) ==="
-          Write-Host "Computer: localhost:3389"
-          Write-Host "Username: RDP"
-          Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "`n🎯 === RDP ACCESS INFO (CLOUDFLARE) === 🎯"
+          Write-Host "💻 Computer: localhost:3389"
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
           Write-Host "======================"
-          Write-Host "Cara Menyambung dari Devices Anda:"
-          Write-Host "1. Install cloudflared di laptop lokal Anda"
+          Write-Host "📱 Cara Menyambung dari Devices Anda:"
+          Write-Host "1️⃣ Install cloudflared di laptop lokal Anda"
           $hostname = "${{ github.event.inputs.tunnel_hostname }}"
           if ($hostname -ne "") {
-            Write-Host "2. Jalankan: cloudflared access tcp --hostname $hostname --url rdp://localhost:3389"
+            Write-Host "2️⃣ Jalankan: cloudflared access tcp --hostname $hostname --url rdp://localhost:3389"
           } else {
-            Write-Host "2. Jalankan: cloudflared access tcp --hostname <NAMA_DOMAIN_TUNNEL_ANDA> --url rdp://localhost:3389"
+            Write-Host "2️⃣ Jalankan: cloudflared access tcp --hostname <NAMA_DOMAIN_TUNNEL_ANDA> --url rdp://localhost:3389"
           }
-          Write-Host "3. Buka Remote Desktop Connection (mstsc), masukan info di atas"
+          Write-Host "3️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
           Write-Host "====================================`n"
 
           $totalMinutes = 340
           for ($i = 0; $i -lt $totalMinutes; $i++) {
-            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Cloudflare Tunnel"
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Cloudflare Tunnel"
             Start-Sleep -Seconds 60
           }
 
       - name: 🧹 Cleanup on Cancel/Failure
         if: cancelled() || failure()
         run: |
-          Write-Host "Cleaning up processes..."
+          Write-Host "🧹 Cleaning up processes..."
           if ($env:TUNNEL_PROCESS_ID) {
             try { Stop-Process -Id $env:TUNNEL_PROCESS_ID -Force -ErrorAction SilentlyContinue } catch {}
           }
           # Cleanup cloudflared processes
           Get-Process -Name cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Write-Host "Cleanup completed"
+          Write-Host "✅ Cleanup completed"

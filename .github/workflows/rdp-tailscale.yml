@@ -30,14 +30,15 @@ jobs:
     steps:
       - name: 📋 Display Configuration Info
         run: |
-          Write-Host "=== PLAYGROUND RDP - TAILSCALE ==="
-          Write-Host "Repository: ${{ github.repository }}"
-          Write-Host "Run ID: ${{ github.run_id }}"
-          Write-Host "Triggered by: ${{ github.actor }}"
+          Write-Host "🔧 === PLAYGROUND RDP - TAILSCALE === 🔧"
+          Write-Host "📦 Repository: ${{ github.repository }}"
+          Write-Host "🆔 Run ID: ${{ github.run_id }}"
+          Write-Host "👤 Triggered by: ${{ github.actor }}"
           Write-Host "==================================="
 
-      - name: Configure Core RDP Settings
+      - name: ⚙️ Configure Core RDP Settings
         run: |
+          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
@@ -46,10 +47,12 @@ jobs:
           netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>nul
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP & Firewall configured"
 
-      - name: Create RDP User
+      - name: 👤 Create RDP User
         id: create-user
         run: |
+          Write-Host "👤 Creating RDP user..."
           $customPass = "${{ github.event.inputs.custom_password }}"
           if ($customPass -ne "") {
             $password = $customPass
@@ -72,49 +75,51 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
           if (-not (Get-LocalUser -Name "RDP")) {
-            Write-Error "User creation failed"
+            Write-Error "❌ User creation failed"
             exit 1
           }
+          Write-Host "✅ RDP user created with secure password"
 
-      - name: Install Tailscale
+      - name: 🦎 Install Tailscale
         run: |
-          Write-Host "Menginstal Tailscale via official installer..."
+          Write-Host "🦎 Installing Tailscale..."
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
           $installerPath = "$env:TEMP\tailscale-setup.exe"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process $installerPath -ArgumentList "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
+          Write-Host "✅ Tailscale installed"
 
-      - name: Establish Tailscale Connection
+      - name: 🔗 Establish Tailscale Connection
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           if (-not $env:TAILSCALE_AUTH_KEY) {
-            Write-Error "TAILSCALE_AUTH_KEY tidak ditemukan di GitHub Secrets."
+            Write-Error "❌ TAILSCALE_AUTH_KEY tidak ditemukan di GitHub Secrets."
             exit 1
           }
 
           $tailscalePath = "$env:ProgramFiles\Tailscale\Tailscale.exe"
           $service = Get-Service -Name Tailscale -ErrorAction SilentlyContinue
           if ($service -and $service.Status -ne 'Running') {
-            Write-Host "Starting Tailscale service..."
+            Write-Host "🔄 Starting Tailscale service..."
             Start-Service -Name Tailscale
             Start-Sleep -Seconds 5
           }
 
-          Write-Host "=== Tailscale Status (Before) ==="
+          Write-Host "📊 === Tailscale Status (Before) ==="
           & $tailscalePath status 2>&1
           Write-Host "=================================="
 
-          Write-Host "Connecting to Tailscale..."
+          Write-Host "🔗 Connecting to Tailscale..."
           $tsOutput = & $tailscalePath up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=gh-runner-$env:GITHUB_RUN_ID --accept-routes 2>&1
           $tsExitCode = $LASTEXITCODE
-          Write-Host "Tailscale up output:"
+          Write-Host "📝 Tailscale up output:"
           Write-Host $tsOutput
-          Write-Host "Exit code: $tsExitCode"
+          Write-Host "🔢 Exit code: $tsExitCode"
           if ($tsExitCode -ne 0) {
-            Write-Error "Tailscale connection failed with exit code $tsExitCode"
+            Write-Error "❌ Tailscale connection failed with exit code $tsExitCode"
             exit 1
           }
 
@@ -127,52 +132,54 @@ jobs:
             $retries++
           }
           if (-not $tsIP) {
-            Write-Error "Tailscale IP not assigned after retries. Exiting."
+            Write-Error "❌ Tailscale IP not assigned after retries. Exiting."
             exit 1
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-          Write-Host "Tailscale IP: $tsIP"
+          Write-Host "🌐 Tailscale IP: $tsIP"
 
-          Write-Host "=== Tailscale Status (After) ==="
+          Write-Host "📊 === Tailscale Status (After) ==="
           & $tailscalePath status 2>&1
           Write-Host "================================="
+          Write-Host "✅ Tailscale connected"
 
-      - name: Verify RDP Connectivity
+      - name: ✅ Verify RDP Connectivity
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "🔍 Verifying RDP connectivity..."
+          Write-Host "🌐 Tailscale IP: $env:TAILSCALE_IP"
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
-            Write-Error "TCP connection to RDP port 3389 failed on $env:TAILSCALE_IP"
+            Write-Error "❌ TCP connection to RDP port 3389 failed on $env:TAILSCALE_IP"
             exit 1
           }
-          Write-Host "TCP connectivity successful!"
+          Write-Host "✅ TCP connectivity successful!"
 
-      - name: Display RDP Access Info
+      - name: 📋 Display RDP Access Info
         run: |
-          Write-Host "`n=== RDP ACCESS INFO (TAILSCALE) ==="
-          Write-Host "Computer: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "`n🎯 === RDP ACCESS INFO (TAILSCALE) === 🎯"
+          Write-Host "💻 Computer: $env:TAILSCALE_IP"
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
           Write-Host "==============================="
-          Write-Host "Cara Menyambung dari Devices Anda:"
-          Write-Host "1. Install Tailscale: https://tailscale.com/download"
-          Write-Host "2. Login ke akun Tailscale yang sama (tailnet yang sama)"
-          Write-Host "3. Tunggu status 'Connected' (hijau) di Tailscale app"
-          Write-Host "4. Buka Remote Desktop Connection (mstsc), masukan info di atas"
+          Write-Host "📱 Cara Menyambung dari Devices Anda:"
+          Write-Host "1️⃣ Install Tailscale: https://tailscale.com/download"
+          Write-Host "2️⃣ Login ke akun Tailscale yang sama (tailnet yang sama)"
+          Write-Host "3️⃣ Tunggu status 'Connected' (hijau) di Tailscale app"
+          Write-Host "4️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
           Write-Host "=====================================`n"
 
           $totalMinutes = 355
           for ($i = 0; $i -lt $totalMinutes; $i++) {
-            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Tailscale"
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Tailscale"
             Start-Sleep -Seconds 60
           }
 
       - name: 🧹 Cleanup on Cancel/Failure
         if: cancelled() || failure()
         run: |
-          Write-Host "Cleaning up Tailscale..."
+          Write-Host "🧹 Cleaning up Tailscale..."
           $tailscalePath = "$env:ProgramFiles\Tailscale\Tailscale.exe"
           if (Test-Path $tailscalePath) {
             try { & $tailscalePath down 2>&1 } catch {}
           }
-          Write-Host "Cleanup completed"
+          Write-Host "✅ Cleanup completed"

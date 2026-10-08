@@ -30,14 +30,15 @@ jobs:
     steps:
       - name: 📋 Display Configuration Info
         run: |
-          Write-Host "=== PLAYGROUND RDP - NGROK TCP ==="
-          Write-Host "Repository: ${{ github.repository }}"
-          Write-Host "Run ID: ${{ github.run_id }}"
-          Write-Host "Triggered by: ${{ github.actor }}"
+          Write-Host "🔧 === PLAYGROUND RDP - NGROK TCP === 🔧"
+          Write-Host "📦 Repository: ${{ github.repository }}"
+          Write-Host "🆔 Run ID: ${{ github.run_id }}"
+          Write-Host "👤 Triggered by: ${{ github.actor }}"
           Write-Host "====================================="
 
-      - name: Configure Core RDP Settings
+      - name: ⚙️ Configure Core RDP Settings
         run: |
+          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
@@ -46,10 +47,12 @@ jobs:
           Remove-NetFirewallRule -DisplayName "RDP-Gate" -ErrorAction SilentlyContinue
           New-NetFirewallRule -DisplayName "RDP-Gate" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389
           Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP & Firewall configured"
 
-      - name: Create RDP User
+      - name: 👤 Create RDP User
         id: create-user
         run: |
+          Write-Host "👤 Creating RDP user..."
           $customPass = "${{ github.event.inputs.custom_password }}"
           if ($customPass -ne "") {
             $password = $customPass
@@ -72,28 +75,29 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
           if (-not (Get-LocalUser -Name "RDP")) {
-            Write-Error "User creation failed"
+            Write-Error "❌ User creation failed"
             exit 1
           }
+          Write-Host "✅ RDP user created with secure password"
 
-      - name: Install & Run Ngrok
+      - name: 🔗 Install & Run Ngrok
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
           if (-not $env:NGROK_AUTH_TOKEN) {
-            Write-Error "Token Ngrok kosong. Harap isi NGROK_AUTH_TOKEN di GitHub Secrets Anda!"
+            Write-Error "❌ Token Ngrok kosong. Harap isi NGROK_AUTH_TOKEN di GitHub Secrets Anda!"
             exit 1
           }
 
-          Write-Host "Mengunduh Ngrok..."
+          Write-Host "📥 Downloading Ngrok..."
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
           Expand-Archive -Path "ngrok.zip" -DestinationPath "." -Force
 
-          Write-Host "Mengonfigurasi Token..."
+          Write-Host "🔐 Configuring Ngrok token..."
           ./ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
 
-          Write-Host "Menjalankan Ngrok Tunnel ke Port RDP..."
+          Write-Host "🔗 Starting Ngrok tunnel to RDP port..."
           $ngrokProcess = Start-Process -FilePath "./ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden -PassThru
           echo "NGROK_PID=$($ngrokProcess.Id)" >> $env:GITHUB_ENV
           Start-Sleep -Seconds 15
@@ -107,44 +111,45 @@ jobs:
               echo "NGROK_PUBLIC_URL=$publicUrl" >> $env:GITHUB_ENV
             }
           } catch {
-            Write-Warning "Gagal ambil public URL dari ngrok API. Cek log manual."
+            Write-Warning "⚠️ Gagal ambil public URL dari ngrok API. Cek log manual."
           }
+          Write-Host "✅ Ngrok tunnel started"
 
-      - name: Display RDP Access Info
+      - name: 📋 Display RDP Access Info
         run: |
           $publicUrl = $env:NGROK_PUBLIC_URL
           if ($publicUrl) {
-            Write-Host "`n=== RDP ACCESS INFO (NGROK) ==="
-            Write-Host "Computer: $publicUrl"
-            Write-Host "Username: RDP"
-            Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+            Write-Host "`n🎯 === RDP ACCESS INFO (NGROK) === 🎯"
+            Write-Host "💻 Computer: $publicUrl"
+            Write-Host "👤 Username: RDP"
+            Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
             Write-Host "================"
-            Write-Host "Cara Menyambung dari Devices Anda:"
-            Write-Host "1. Buka Remote Desktop Connection (mstsc), masukan info di atas"
+            Write-Host "📱 Cara Menyambung dari Devices Anda:"
+            Write-Host "1️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
             Write-Host "==============================`n"
           } else {
-            Write-Host "`n=== RDP ACCESS INFO (NGROK) ==="
-            Write-Host "Computer: (cek log step 'Install & Run Ngrok' untuk URL 0.tcp.ngrok.io:XXXXX)"
-            Write-Host "Username: RDP"
-            Write-Host "Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+            Write-Host "`n🎯 === RDP ACCESS INFO (NGROK) === 🎯"
+            Write-Host "💻 Computer: (cek log step 'Install & Run Ngrok' untuk URL 0.tcp.ngrok.io:XXXXX)"
+            Write-Host "👤 Username: RDP"
+            Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
             Write-Host "================"
-            Write-Host "Cara Menyambung dari Devices Anda:"
-            Write-Host "1. Buka Remote Desktop Connection (mstsc), masukan info di atas"
+            Write-Host "📱 Cara Menyambung dari Devices Anda:"
+            Write-Host "1️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
             Write-Host "==============================`n"
           }
 
           $totalMinutes = 340
           for ($i = 0; $i -lt $totalMinutes; $i++) {
-            Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Ngrok"
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Ngrok"
             Start-Sleep -Seconds 60
           }
 
       - name: 🧹 Cleanup on Cancel/Failure
         if: cancelled() || failure()
         run: |
-          Write-Host "Cleaning up processes..."
+          Write-Host "🧹 Cleaning up processes..."
           if ($env:NGROK_PID) {
             try { Stop-Process -Id $env:NGROK_PID -Force -ErrorAction SilentlyContinue } catch {}
           }
           Get-Process -Name ngrok -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Write-Host "Cleanup completed"
+          Write-Host "✅ Cleanup completed"

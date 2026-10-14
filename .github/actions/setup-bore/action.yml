@@ -81,16 +81,37 @@ runs:
         fi
         chmod +x "$BORE_BIN"
 
-        ARGS=(local "$TUNNEL_PORT" --to "$BORE_SERVER")
         [ -n "$BORE_SECRET" ] && ARGS+=(--secret "$BORE_SECRET")
 
-        echo "🕳️  Starting bore tunnel -> localhost:${TUNNEL_PORT} via ${BORE_SERVER}"
+        # Prefer an explicit IPv4 literal. GitHub Actions runners commonly advertise an
+        # AAAA record for public hosts but have no working IPv6 egress, and bore's client
+        # then hangs until "timed out waiting for initial message". The reported endpoint
+        # stays the hostname so the client-facing address is unchanged.
+        BORE_TARGET="$BORE_SERVER"
+        BORE_IP="$(python3 -c "import socket; print(socket.gethostbyname('$BORE_SERVER'))" 2>/dev/null || true)"
+        if [ -n "$BORE_IP" ]; then
+          BORE_TARGET="$BORE_IP"
+        else
+          echo "⚠️  Gagal resolve IPv4 untuk ${BORE_SERVER}, pakai hostname apa adanya" >&2
+        fi
+
+        # Pre-flight: prove the control port is reachable and report it clearly.
+        # Without this, bore just dies with "timed out waiting for initial message"
+        # and gives no hint about why.
+        if ! python3 -c "import socket,sys; s=socket.socket(); s.settimeout(15); sys.exit(0 if s.connect_ex((sys.argv[1],7835))==0 else 1)" "$BORE_TARGET"; then
+          echo "❌ TCP ${BORE_TARGET}:7835 tidak terjangkau dari runner ini." >&2
+          echo "   bore butuh control port TCP 7835 terbuka ke server bore." >&2
+          exit 1
+        fi
+        echo "✅ Control port ${BORE_TARGET}:7835 terjangkau"
+
+        echo "🕳️  Starting bore tunnel -> localhost:${TUNNEL_PORT} via ${BORE_SERVER} (${BORE_TARGET})"
         nohup "$BORE_BIN" "${ARGS[@]}" >"$RUNNER_TEMP/bore.log" 2>&1 &
         TUNNEL_PID=$!
         sleep 15
 
         if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
-          echo "❌ bore berhenti saat start. Log:" >&2
+          echo "❌ bore berhenti saat start. Raw log:" >&2
           cat "$RUNNER_TEMP/bore.log" >&2
           exit 1
         fi

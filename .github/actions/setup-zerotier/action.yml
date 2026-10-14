@@ -44,7 +44,7 @@ runs:
             MSI="$RUNNER_TEMP/zerotier.msi"
             # /dist/ is the stable "latest" path; the versioned RELEASES/ path
             # (ZeroTier_Networks_x64.msi) returns 404 and must not be used.
-            curl -sSL -o "$MSI" "https://download.zerotier.com/dist/ZeroTierOne.msi" || {
+            curl -fsSL -o "$MSI" "https://download.zerotier.com/dist/ZeroTierOne.msi" || {
               echo "❌ Gagal mengunduh installer ZeroTier" >&2; exit 1; }
             powershell -NoProfile -Command "Start-Process msiexec -ArgumentList '/i','$MSI','/qn','/norestart' -Wait" >/dev/null
             rm -f "$MSI"

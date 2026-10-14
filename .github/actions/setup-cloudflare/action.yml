@@ -43,15 +43,15 @@ runs:
 
         case "${RUNNER_OS}" in
           Windows)
-            curl -sSL -o "$BIN.exe" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-${GOARCH}.exe"
+            curl -fsSL -o "$BIN.exe" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-${GOARCH}.exe"
             BIN="$BIN.exe"
             ;;
           Linux)
-            curl -sSL -o "$BIN" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${GOARCH}"
+            curl -fsSL -o "$BIN" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${GOARCH}"
             chmod +x "$BIN"
             ;;
           macOS)
-            curl -sSL -o "$WORKDIR/cloudflared.tgz" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${GOARCH}.tgz"
+            curl -fsSL -o "$WORKDIR/cloudflared.tgz" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${GOARCH}.tgz"
             tar -xzf "$WORKDIR/cloudflared.tgz" -C "$WORKDIR"
             chmod +x "$BIN"
             ;;

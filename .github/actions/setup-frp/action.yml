@@ -70,10 +70,10 @@ runs:
         URL="https://github.com/fatedier/frp/releases/download/${TAG}/${FILE}"
 
         if [ "$ARCHIVE" = "zip" ]; then
-          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          curl -fsSL -o "$WORKDIR/$FILE" "$URL"
           unzip -o -q "$WORKDIR/$FILE" -d "$WORKDIR"
         else
-          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          curl -fsSL -o "$WORKDIR/$FILE" "$URL"
           tar -xzf "$WORKDIR/$FILE" -C "$WORKDIR"
         fi
 

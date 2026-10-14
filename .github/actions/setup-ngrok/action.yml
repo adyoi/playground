@@ -50,7 +50,7 @@ runs:
         WORKDIR="$RUNNER_TEMP/ngrok"
         mkdir -p "$WORKDIR"
         ZIP="$WORKDIR/ngrok.zip"
-        curl -sSL -o "$ZIP" "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${PLATFORM}-${GOARCH}.zip"
+        curl -fsSL -o "$ZIP" "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${PLATFORM}-${GOARCH}.zip"
         unzip -o -q "$ZIP" -d "$WORKDIR"
 
         NGROK_BIN="$WORKDIR/ngrok"

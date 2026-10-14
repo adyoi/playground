@@ -46,7 +46,7 @@ runs:
           Windows)
             echo "🦎 Installing Tailscale (Windows)..."
             INSTALLER="$RUNNER_TEMP/tailscale-setup.exe"
-            curl -sSL -o "$INSTALLER" "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
+            curl -fsSL -o "$INSTALLER" "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
             powershell -NoProfile -Command "Start-Process -FilePath '$INSTALLER' -ArgumentList '/quiet','/norestart' -Wait" >/dev/null
             rm -f "$INSTALLER"
             ;;

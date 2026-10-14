@@ -54,19 +54,22 @@ runs:
           https://api.github.com/repos/ekzhang/bore/releases/latest \
           | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
         [ -z "$TAG" ] && TAG="v0.6.0"
-        VERSION="${TAG#v}"
         echo "📦 bore ${TAG} (${RUNNER_OS}/${TARGET})"
 
         WORKDIR="$RUNNER_TEMP/bore"
         mkdir -p "$WORKDIR"
-        FILE="bore-${VERSION}-${TARGET}.${ARCHIVE}"
+        # NOTE: the release asset keeps the leading "v" (bore-v0.6.0-...), so the tag
+        # is used verbatim. Stripping it yields a 404 that curl would happily save as
+        # an HTML page and only fails later, inside unzip.
+        FILE="bore-${TAG}-${TARGET}.${ARCHIVE}"
         URL="https://github.com/ekzhang/bore/releases/download/${TAG}/${FILE}"
+        echo "⬇️  ${URL}"
 
         if [ "$ARCHIVE" = "zip" ]; then
-          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          curl -fsSL -o "$WORKDIR/$FILE" "$URL" || { echo "❌ Download gagal: $URL" >&2; exit 1; }
           unzip -o -q "$WORKDIR/$FILE" -d "$WORKDIR"
         else
-          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          curl -fsSL -o "$WORKDIR/$FILE" "$URL" || { echo "❌ Download gagal: $URL" >&2; exit 1; }
           tar -xzf "$WORKDIR/$FILE" -C "$WORKDIR"
         fi
 

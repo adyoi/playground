@@ -71,7 +71,7 @@ runs:
           Windows)
             echo "🔐 Installing WireGuard (Windows)..."
             WG_INSTALLER="$RUNNER_TEMP/wireguard-installer.exe"
-            curl -sSL -o "$WG_INSTALLER" "https://download.wireguard.com/windows-client/wireguard-installer.exe"
+            curl -fsSL -o "$WG_INSTALLER" "https://download.wireguard.com/windows-client/wireguard-installer.exe"
             powershell -NoProfile -Command "Start-Process -FilePath '$WG_INSTALLER' -ArgumentList '/S' -Wait" >/dev/null
             rm -f "$WG_INSTALLER"
             ;;

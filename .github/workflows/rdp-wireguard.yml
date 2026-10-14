@@ -54,6 +54,9 @@ jobs:
           echo "🔑 Hub: ${{ github.event.inputs.hub_endpoint }}"
           echo "=================================="
 
+      - name: 📜 Checkout Repository
+        uses: actions/checkout@v4
+
       - name: ⚙️ Setup Remote Access
         id: access
         uses: ./.github/actions/setup-rdp

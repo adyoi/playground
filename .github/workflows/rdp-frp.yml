@@ -54,6 +54,9 @@ jobs:
           echo "🖧  frps: ${{ github.event.inputs.server_addr }}:${{ github.event.inputs.server_port }}"
           echo "=================================="
 
+      - name: 📜 Checkout Repository
+        uses: actions/checkout@v4
+
       - name: ⚙️ Setup Remote Access
         id: access
         uses: ./.github/actions/setup-rdp

@@ -40,6 +40,9 @@ jobs:
           echo "🪐 Network: ${{ github.event.inputs.network_id }}"
           echo "=================================="
 
+      - name: 📜 Checkout Repository
+        uses: actions/checkout@v4
+
       - name: ⚙️ Setup Remote Access
         id: access
         uses: ./.github/actions/setup-rdp

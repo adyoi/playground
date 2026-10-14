@@ -17,13 +17,17 @@ inputs:
     description: 'Name of the firewall rule to create'
     required: false
     default: 'RDP-Playground'
+  protocol:
+    description: 'auto = RDP on Windows/Linux, SSH on macOS. Use rdp/ssh to force one.'
+    required: false
+    default: 'auto'
 
 outputs:
   username:
     description: 'Username to use from the client'
     value: ${{ steps.setup.outputs.username }}
   password:
-    description: 'Password for the login user'
+    description: 'Password for the login user (empty for SSH-only setups)'
     value: ${{ steps.setup.outputs.password }}
   protocol:
     description: 'Remote access protocol exposed by this runner (rdp or ssh)'
@@ -32,7 +36,7 @@ outputs:
     description: 'TCP port exposed by this runner'
     value: ${{ steps.setup.outputs.port }}
   ssh_private_key:
-    description: 'PEM private key (macOS only, empty elsewhere)'
+    description: 'PEM private key (SSH setups only, empty otherwise)'
     value: ${{ steps.setup.outputs.ssh_private_key }}
 
 runs:
@@ -44,6 +48,7 @@ runs:
         RDP_USERNAME: ${{ inputs.username }}
         RDP_CUSTOM_PASSWORD: ${{ inputs.custom_password }}
         FIREWALL_RULE: ${{ inputs.firewall_rule }}
+        WANT_PROTOCOL: ${{ inputs.protocol }}
       run: |
         set -uo pipefail
 
@@ -52,6 +57,34 @@ runs:
         PORT="3389"
         SSH_KEY=""
         NOTES=""
+
+        # Resolve the requested protocol. "auto" keeps the behaviour that is
+        # already verified on runners: Windows -> RDP, Linux -> xrdp, macOS -> SSH
+        # (macOS runners have no console session, so Screen Sharing cannot render).
+        case "${WANT_PROTOCOL:-auto}" in
+          auto)
+            if [ "${RUNNER_OS}" = "macOS" ]; then PROTOCOL="ssh"; else PROTOCOL="rdp"; fi
+            ;;
+          rdp|ssh) PROTOCOL="$WANT_PROTOCOL" ;;
+          *)
+            echo "❌ protocol '${WANT_PROTOCOL}' tidak dikenal. Gunakan auto | rdp | ssh" >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "$PROTOCOL" = "ssh" ]; then
+          PORT="22"
+        fi
+
+        # macOS cannot do RDP at all (no attached console), so fail loudly there
+        # instead of pretending a tunnel was set up.
+        if [ "$PROTOCOL" = "rdp" ] && [ "${RUNNER_OS}" = "macOS" ]; then
+          echo "❌ RDP tidak tersedia di runner macOS." >&2
+          echo "   Runner macOS tidak punya console session, jadi Screen Sharing/VNC" >&2
+          echo "   tidak punya display untuk di-render (selalu black screen)." >&2
+          echo "   Pakai protocol=ssh untuk macOS." >&2
+          exit 1
+        fi
 
         gen_password() {
           # Random alnum core + a guaranteed upper/lower/digit/special suffix so the
@@ -66,8 +99,9 @@ runs:
           PASSWORD="$(gen_password)"
         fi
 
-        case "${RUNNER_OS}" in
-          Windows)
+        if [ "$PROTOCOL" = "rdp" ]; then
+          case "${RUNNER_OS}" in
+            Windows)
             echo "🪟 Configuring native RDP (TermService)..."
 
             # Git Bash (MSYS) rewrites any argument starting with "/" into a Windows
@@ -154,29 +188,64 @@ runs:
             echo "✅ xrdp configured"
             ;;
           macOS)
-            # macOS runners have no attached console/display, so Screen Sharing (VNC/RDP)
-            # cannot render a session. SSH is the working remote-access path here.
-            echo "🍎 Configuring SSH (macOS runners have no console session for Screen Sharing)..."
-            PROTOCOL="ssh"
-            PORT="22"
-
-            KEY_PATH="$HOME/.ssh/playground_id_ed25519"
-            mkdir -p "$HOME/.ssh"
-            chmod 700 "$HOME/.ssh"
-            rm -f "$KEY_PATH" "$KEY_PATH.pub"
-            ssh-keygen -t ed25519 -N "" -C "playground-rdp" -f "$KEY_PATH" >/dev/null 2>&1
-            cat "$KEY_PATH.pub" >> "$HOME/.ssh/authorized_keys"
-            chmod 600 "$HOME/.ssh/authorized_keys"
-
-            sudo systemsetup -setremotelogin on >/dev/null 2>&1 \
-              || NOTES="$NOTES systemsetup-failed"
-            SSH_KEY="$(cat "$KEY_PATH")"
+            # Unreachable: macOS + rdp is rejected before this block.
+            echo "❌ RDP tidak didukung di macOS runner." >&2
+            exit 1
             ;;
           *)
             echo "❌ Unsupported RUNNER_OS: ${RUNNER_OS}" >&2
             exit 1
             ;;
         esac
+        else
+          # ---------- SSH path (any OS, selected via protocol=ssh or auto on macOS) ----------
+          echo "🔑 Configuring SSH on ${RUNNER_OS} (port ${PORT})..."
+
+          KEY_PATH="$HOME/.ssh/playground_id_ed25519"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          rm -f "$KEY_PATH" "$KEY_PATH.pub"
+          if ! ssh-keygen -t ed25519 -N "" -C "playground-ssh" -f "$KEY_PATH" >/dev/null 2>&1; then
+            echo "❌ Gagal membuat keypair SSH" >&2
+            exit 1
+          fi
+          cat "$KEY_PATH.pub" >> "$HOME/.ssh/authorized_keys"
+          chmod 600 "$HOME/.ssh/authorized_keys"
+          SSH_KEY="$(cat "$KEY_PATH")"
+
+          # Make sure something is actually listening on 22. Linux/macOS runners
+          # already run sshd; Windows needs the OpenSSH server started.
+          if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(5); sys.exit(0 if s.connect_ex(('127.0.0.1',22))==0 else 1)"; then
+            echo "✅ sshd sudah listen di port 22"
+          else
+            case "${RUNNER_OS}" in
+              macOS)
+                sudo systemsetup -setremotelogin on >/dev/null 2>&1 || NOTES="$NOTES systemsetup-failed"
+                ;;
+              Linux)
+                sudo systemctl enable ssh >/dev/null 2>&1 || true
+                sudo systemctl restart ssh >/dev/null 2>&1 \
+                  || sudo systemctl restart sshd >/dev/null 2>&1 \
+                  || NOTES="$NOTES systemctl-ssh-failed"
+                ;;
+              Windows)
+                powershell -NoProfile -Command "Get-Service sshd -ErrorAction SilentlyContinue | Start-Service" >/dev/null 2>&1 \
+                  || NOTES="$NOTES sshd-not-started"
+                ;;
+            esac
+            sleep 5
+            if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(5); sys.exit(0 if s.connect_ex(('127.0.0.1',22))==0 else 1)"; then
+              echo "✅ sshd listen setelah start manual"
+            else
+              echo "❌ Port 22 tidak listen setelah trying start sshd" >&2
+              exit 1
+            fi
+          fi
+
+          # The tunnel logs the password only for RDP-style logins; SSH uses the key.
+          PASSWORD=""
+          echo "✅ SSH configured (authorized_key untuk runner user)"
+        fi
 
         {
           echo "username=${USER_NAME}"
@@ -189,6 +258,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
         echo "✅ Remote access ready -> protocol=${PROTOCOL} port=${PORT} user=${USER_NAME}"
+        echo "   (SSH: pakai username 'runner' dan private key di bawah, bukan password)"
         # Must be an `if`, not `[ -n "$X" ] && echo ...`: as the final command that
         # form returns exit 1 whenever NOTES is empty and fails the whole step.
         if [ -n "$NOTES" ]; then

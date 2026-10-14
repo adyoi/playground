@@ -189,4 +189,9 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
         echo "✅ Remote access ready -> protocol=${PROTOCOL} port=${PORT} user=${USER_NAME}"
-        [ -n "$NOTES" ] && echo "ℹ️  Non-fatal notes:${NOTES}"
+        # Must be an `if`, not `[ -n "$X" ] && echo ...`: as the final command that
+        # form returns exit 1 whenever NOTES is empty and fails the whole step.
+        if [ -n "$NOTES" ]; then
+          echo "ℹ️  Non-fatal notes:${NOTES}"
+        fi
+        exit 0

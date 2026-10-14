@@ -1,34 +1,40 @@
 # Playground RDP - GitHub Actions Remote Desktop
 
-Repository ini berisi workflow GitHub Actions untuk membuat akses Remote Desktop (RDP) ke runner Windows GitHub Actions menggunakan tiga metode tunneling berbeda.
+Repository ini berisi workflow GitHub Actions untuk memberi akses Remote Desktop (RDP) atau SSH
+ke runner GitHub Actions menggunakan beberapa metode tunneling berbeda.
 
 ## 📋 Daftar Workflow
 
-| Workflow | Metode Tunnel | OS Support | Butuh Server Sendiri? | Setup |
-|----------|---------------|------------|:---------------------:|-------|
-| `rdp-cloudflare.yml` | Cloudflare Tunnel | Windows only | ❌ | Domain + tunnel token |
-| `rdp-ngrok.yml` | Ngrok TCP | Windows only | ❌ | Akun + authtoken |
-| `rdp-tailscale.yml` | Tailscale (WireGuard) | Windows only | ❌ | Akun + auth key |
-| `rdp-zerotier.yml` | ZeroTier (mesh VPN) | **Win + Linux + macOS** | ❌ | Network ID |
-| `rdp-bore.yml` | bore (public TCP) | **Win + Linux + macOS** | ❌ | **Nol** — langsung jalan |
-| `rdp-wireguard.yml` | WireGuard (mesh VPN) | **Win + Linux + macOS** | ✅ | VPS + WireGuard hub |
-| `rdp-frp.yml` | frp (TCP reverse proxy) | **Win + Linux + macOS** | ✅ | VPS + frps server |
+| Workflow | Metode Tunnel | OS Support | Setup | Status |
+|----------|---------------|------------|-------|--------|
+| `rdp-cloudflare.yml` | Cloudflare Tunnel | Windows only | Domain + tunnel token | ✅ legacy |
+| `rdp-ngrok.yml` | Ngrok TCP | Windows only | Akun + authtoken | ✅ legacy |
+| `rdp-tailscale.yml` | Tailscale (WireGuard) | Windows only | Akun + auth key | ✅ legacy |
+| `rdp-zerotier.yml` | ZeroTier (mesh VPN) | **Win + Linux + macOS** | Network ID | ✅ baru |
 
-> ⚠️ **Penting soal input `os`:** hanya 4 workflow baru (`zerotier`, `bore`, `wireguard`, `frp`) yang
-> benar-benar menghormati input `os`. Tiga workflow lama (`rdp-cloudflare`, `rdp-ngrok`, `rdp-tailscale`)
-> sudah teruji dan **masih Windows-only** — step-nya memakai `shell: pwsh` + registry Windows
-> (`HKLM:`, `New-LocalUser`, `netsh`). Memilih `ubuntu-latest`/`macos-latest` di sana akan **gagal**.
-> Alasan file tersebut sengaja tidak diubah: sudah teruji dipakai, dan saya tidak ingin merusak yang sudah jalan.
+> ⚠️ **Penting soal input `os`:** hanya `rdp-zerotier.yml` yang benar-benar menghormati input `os`.
+> Tiga workflow lama (`rdp-cloudflare`, `rdp-ngrok`, `rdp-tailscale`) sudah teruji dan **masih Windows-only**
+> — step-nya memakai `shell: pwsh` + registry Windows (`HKLM:`, `New-LocalUser`, `netsh`).
+> Memilih `ubuntu-latest`/`macos-latest` di sana akan **gagal**.
+> Alasan file tersebut sengaja tidak diubah: sudah teruji dipakai, dan tidak ingin merusak yang sudah jalan.
 > Lihat [Pilih OS Runner](#pilih-os-runner-workflow-input).
 
-### Picking the fastest starting point
+### Memilih titik awal tercepat
 
 | Kalau Anda… | Pakai |
 |---|---|
-| Mau coba **sekarang, tanpa akun** | `rdp-bore.yml` |
-| Mau **gratis + privat**, tanpa VPS | `rdp-tailscale.yml` (Windows) / `rdp-zerotier.yml` (semua OS) |
-| Sudah punya domain | `rdp-cloudflare.yml` |
-| Sudah punya VPS | `rdp-wireguard.yml` (tercepat) atau `rdp-frp.yml` (fleksibel) |
+| Sudah pakai Ngrok/Tailscale/Cloudflare (Windows) | workflow legacy-nya |
+| Butuh **Linux atau macOS** | `rdp-zerotier.yml` |
+| Mau **RDP sekaligus opsi SSH** | `rdp-zerotier.yml` + input `protocol` |
+
+### 🔒 Catatan keamanan
+
+Semua workflow ini membuat **akun Administrator dengan password acak** lalu mengeksposnya lewat
+internet publik. Itu inherent pada konsepnya. Yang bisa dilakukan:
+
+- Hapus log run setelah selesai — log berisi password / private key
+- Pakai `protocol: ssh` bila hanya butuh terminal (lebih ringan daripada RDP)
+- Jangan pernah simpan kredensial penting di runner yang diakses lewat tunnel ini
 
 ---
 
@@ -246,14 +252,16 @@ cloudflared access tcp --hostname rdp.namaku.digitalplat.org --url rdp://localho
    - **Public** — langsung dapat IP tanpa otorisasi (paling gampang, kurang aman)
 4. Catat **Network ID** (16 karakter hex, contoh: `a1b2c3d4e5f6a7b8`)
 
-> Tidak ada GitHub Secret yang dibutuhkan — Network ID dikirim sebagai input saat Run workflow.
+> Network ID bisa diisi saat Run workflow, **atau** disimpan sebagai repository secret
+> bernama `ZEROTIER_NETWORK_ID` supaya tidak perlu di-paste tiap kali.
 
 ### Menjalankan Workflow
 1. Buka tab **Actions** → **"Playground RDP (ZeroTier)"**
 2. **Run workflow** → isi:
-   - **network_id**: Network ID dari langkah di atas (wajib)
+   - **network_id**: Network ID (boleh dikosongkan jika secret `ZEROTIER_NETWORK_ID` sudah ada)
    - **custom_password**: opsional, kosongkan untuk auto-generate
    - **os**: pilih `windows-latest` / `ubuntu-latest` / `macos-latest`
+   - **protocol**: opsional — `auto` (default), `rdp`, atau `ssh`
 3. Tunggu step **"Install & Join ZeroTier"** selesai
 4. Copy **Computer** dari step "Display RDP Access Info"
 
@@ -274,120 +282,34 @@ cloudflared access tcp --hostname rdp.namaku.digitalplat.org --url rdp://localho
 2. Tunggu status **Connected** (hijau)
 3. Catat IP dari log workflow (format `10.x.x.x` untuk network private, atau `999.x.x.x` untuk public)
 
-#### Remote Desktop Connection (Windows/Linux)
+### 🔀 Pilih RDP atau SSH (`protocol`)
+
+| `protocol` | Windows | Ubuntu | macOS |
+|------------|---------|--------|-------|
+| `auto` (default) | RDP 3389 | xrdp 3389 | SSH 22 |
+| `rdp` | RDP 3389 | xrdp 3389 | ❌ error jelas |
+| `ssh` | SSH 22 | SSH 22 | SSH 22 |
+
+`macos-latest` tidak bisa RDP sama sekali — runner itu tidak punya console session,
+jadi Screen Sharing selalu black screen. Kalau pilih `rdp` di macOS, workflow gagal
+dengan pesan yang menjelaskan alasannya.
+
+#### RDP (Windows/Linux)
 - **Computer**: `10.x.x.x:3389` (dari log)
 - **Username**: `RDP`
 - **Password**: (dari log workflow)
 
----
+#### SSH (semua OS)
+- **Computer**: `10.x.x.x:22` (dari log)
+- **User**: `runner` (user bawaan runner, bukan user `RDP`)
+- **Auth**: private key yang dicetak di log workflow
 
-## 🕳️ 5. bore (`rdp-bore.yml`)
+```bash
+# simpan private key dari log, lalu:
+ssh -i playground_key -p 22 runner@10.x.x.x
+```
 
-> **Paling cepat untuk coba-coba: tanpa akun, tanpa setup, tanpa domain.**
-
-### Fitur
-- TCP tunnel publik, **nol konfigurasi** — langsung jalan begitu workflow di-run
-- Tidak perlu akun, domain, kartu kredit, atau VPS
-- Client **tidak perlu install apa-apa** — cukup `mstsc`
-- Binary statis kecil (~1 MB), built for Windows/Linux/macOS (amd64 & arm64)
-
-### Persiapan
-Tidak ada. Langsung ke **Actions → Run workflow**.
-
-### Koneksi dari Local (Client)
-- **Computer**: `bore.pub:XXXXX` (dari log workflow)
-- **Username**: `RDP`
-- **Password**: (dari log workflow)
-
-> ⚠️ **Endpoint `bore.pub` sepenuhnya publik tanpa autentikasi tambahan.**
-> Satu-satunya pengaman RDP Anda adalah password yang di-generate (24 karakter acak).
-> Ini **tidak** cocok untuk akses jangka panjang atau mesin yang berisi data sensitif.
-
-### Self-hosted bore server
-Kalau punya VPS sendiri, jalankan `bore server --secret <secret>` di sana, lalu isi input
-**bore server** dengan alamatnya. Password disimpan sebagai GitHub Secret `BORE_SECRET`.
-
----
-
-## 🔐 6. WireGuard (`rdp-wireguard.yml`)
-
-> Mesh VPN level-3, performa tertinggi. **Butuh VPS + WireGuard hub milik Anda sendiri.**
-
-### Fitur
-- Layer 3 (bukan proxy) → performa & latency terbaik di antara semua metode di repo ini
-- Tidak ada port yang dibuka di runner: semua traffic ter-tunnel
-- Kriptografi modern (Curve25519 / ChaCha20-Poly1305)
-- Mendukung Pre-Shared Key untuk hardening pasca-kuantum
-
-### Persiapan (Sekali Saja)
-1. Siapkan VPS Linux dengan **UDP 51820 terbuka**.
-2. Install WireGuard, lalu **buat interface `wg0` sebagai hub**:
-   ```bash
-   # /etc/wireguard/wg0.conf di VPS
-   [Interface]
-   Address    = 10.8.0.1/24
-   ListenPort = 51820
-   PrivateKey = <private-key-hub-anda>
-   # PublicKey  = <dari blok peer di bawah>
-
-   [Peer]                       # peer = runner ini
-   #PublicKey = <runner public key dari log workflow>
-   AllowedIPs = 10.8.0.2/32
-   ```
-3. `sudo sysctl -p && sudo wg-quick up wg0`
-4. Catat **PublicKey hub** (`: wg pubkey < private-key-hub>`).
-
-### Menjalankan Workflow
-Isi saat Run workflow:
-- **hub_public_key** (wajib) — PublicKey hub
-- **hub_endpoint** (wajib) — `ip-vps-anda:51820`
-- **tunnel_address** — default `10.8.0.2/32`
-- **hub_address** — default `10.8.0.1/32`
-
-### Koneksi dari Local (Client)
-> **Dua langkah, urutan penting.**
-
-1. **Tambahkan runner sebagai peer di hub** — salin PublicKey runner dari log workflow ke
-   `wg0.conf` di VPS, lalu `sudo wg syncconf wg0 <(wg-quick strip wg0)`.
-2. Di device klien, import konfigurasi mesh hub Anda → mstsc ke `10.8.0.2:3389`.
-
----
-
-## 🔗 7. frp (`rdp-frp.yml`)
-
-> TCP reverse proxy yang Anda host sendiri. Paling fleksibel untuk multi-port.
-
-### Fitur
-- Proxy TCP/UDP level-7, bukan VPN — hanya traffic yang di-proxy yang terekspos
-- `frps` (server) ringan, jalan di VPS sekecil 512 MB
-- Auth token + TLS antara client dan server
-- Cocok kalau butuh banyak proxy dari banyak runner
-
-### Persiapan (Sekali Saja)
-1. VPS Linux, buka **TCP 7000** (bind port frps).
-2. Download `frps` dan jalankan dengan config:
-   ```toml
-   # frps.toml di VPS
-   bindPort = 7000
-   auth.token = "token-sama-dengan-di-workflow"
-   # Batasi port yang boleh dipakai runner:
-   allowPorts = [{ start = 33890, end = 33999 }]
-   ```
-3. Jalankan: `./frps -c frps.toml`
-
-### Menjalankan Workflow
-- **server_addr** (wajib) — IP/domain VPS
-- **server_port** — default `7000`
-- **auth_token** (wajib) — harus sama dengan `auth.token` di frps
-- **remote_port** — default `33890`, harus berada dalam rentang `allowPorts`
-
-### Koneksi dari Local (Client)
-- **Computer**: `ip-vps-anda:33890`
-- **Username**: `RDP`
-- **Password**: (dari log workflow)
-
-> ⚠️ Kalau step gagal dengan `auth mismatch`, `port not allowed`, atau `connection refused`,
-> log frpc sudah mencetak penyebabnya — jalankan ulang workflow untuk melihatnya.
+> ⚠️ Private key dicetak penuh di log run. Hapus log run setelah key tersimpan aman di mesin Anda.
 
 ---
 
@@ -413,6 +335,15 @@ Isi saat Run workflow:
 Workflow sudah buka firewall port 3389. Jika masih gagal:
 - Cek log step "Verify RDP Connectivity"
 - Pastikan service `TermService` running
+
+### Error ZeroTier: node dapat IP tapi tidak bisa dijangkau
+- **Access type Private**: node harus di-*Authorize* dulu di my.zerotier.com → Machines
+- Jalur P2P gagal → ZeroTier fallback ke relay, jadi tetap jalan tapi latency lebih tinggi
+
+### `protocol: ssh` — private key tidak muncul di log
+- Runner memakai user bawaan (`runner`), bukan user `RDP`
+- Key hanya dicetak di step "Display RDP Access Info"; kalau workflow gagal sebelum
+  step itu, key memang belum pernah di-generate
 
 ---
 
@@ -446,9 +377,9 @@ Workflow sudah buka firewall port 3389. Jika masih gagal:
 │  Client     │────▶│   Tunnel/VPN        │────▶│  GitHub Actions      │     │   Runner OS         │
 │ (Your PC)   │     │ (Cloudflare/        │     │  Workflow Runs       │     │  (pilihan:         │
 │             │     │  Ngrok/Tailscale/   │     │  1. Setup RDP/SSH   │     │   windows-latest/  │
-│             │     │  ZeroTier/bore/     │     │  2. Start Tunnel     │     │   ubuntu-latest/   │
-│             │     │  WireGuard/frp)     │     │                     │     │   macos-latest)    │
-└─────────────┘     └─────────────────────┘     └──────────────────────┘     │   macos-latest)    │
+│             │     │  ZeroTier)          │     │  2. Start Tunnel     │     │   ubuntu-latest/   │
+│             │     │                     │     │                     │     │   macos-latest)    │
+└─────────────┘     └─────────────────────┘     └──────────────────────┘     │                   │
                                                                               └─────────────────────┘
 ```
 
@@ -468,9 +399,6 @@ Semua workflow punya input `os`, **tetapi tidak semua workflow mendukung semua O
 | `rdp-ngrok.yml` | ✅ | ❌ | ❌ |
 | `rdp-tailscale.yml` | ✅ | ❌ | ❌ |
 | `rdp-zerotier.yml` | ✅ | ✅ | ✅ |
-| `rdp-bore.yml` | ✅ | ✅ | ✅ |
-| `rdp-wireguard.yml` | ✅ | ✅ | ✅ |
-| `rdp-frp.yml` | ✅ | ✅ | ✅ |
 
 > ❌ = akan **gagal** di step setup, bukan "jalan tanpa fitur". Ketiga workflow lama masih memakai
 > `shell: pwsh` + registry Windows (`HKLM:`, `New-LocalUser`, `netsh`). Input `os` di sana
@@ -507,11 +435,9 @@ Private key-nya dicetak di log run.
 | Ngrok | TCP | 3389 | Dynamic (0.tcp.ngrok.io:XXXXX) |
 | Tailscale | WireGuard/UDP | 3389 | 3389 (direct IP) |
 | ZeroTier | ZeroTier E2E (UDP, relay fallback) | 3389 | 3389 (managed IP) |
-| bore | TCP | 3389 | 3389 (bore.pub:random) |
-| WireGuard | WireGuard/UDP | 3389 | 3389 (tunnel IP) |
-| frp | TCP | 3389 | 3389 (hub IP:remote port) |
 
-> Untuk `macos-latest`, port runner = **22** (SSH), bukan 3389.
+> Dengan `protocol: ssh`, port runner jadi **22** untuk semua OS.
+> Port **22** juga dipakai otomatis di `macos-latest` (RDP tidak mungkin di sana).
 
 ---
 
@@ -520,8 +446,11 @@ Private key-nya dicetak di log run.
 PR welcome untuk:
 - Perbaikan bug / optimasi workflow
 - Dokumentasi tambahan
-- Support metode tunnel lain (WireGuard manual, frp, Playit, dll)
 - Setup remote access untuk OS runner lain (Windows arm64, Fedora, dll)
+- Metode tunnel **tanpa server milik sendiri** (nilai plusnya: repo ini tidak butuh VPS)
+
+> Metode yang butuh VPS (WireGuard hub, frps server, bore server sendiri) sengaja tidak
+> disertakan: premis repo ini adalah *tidak perlu infrastruktur tambahan* besides a throwaway runner.
 
 ### Struktur Repo
 
@@ -531,23 +460,17 @@ PR welcome untuk:
 │   ├── rdp-cloudflare.yml    # Windows-only (legacy, tested)
 │   ├── rdp-ngrok.yml         # Windows-only (legacy, tested)
 │   ├── rdp-tailscale.yml     # Windows-only (legacy, tested)
-│   ├── rdp-zerotier.yml      # Windows + Linux + macOS
-│   ├── rdp-bore.yml          # Windows + Linux + macOS
-│   ├── rdp-wireguard.yml     # Windows + Linux + macOS
-│   └── rdp-frp.yml           # Windows + Linux + macOS
+│   └── rdp-zerotier.yml      # Windows + Linux + macOS
 └── actions/
-    ├── setup-rdp/            # Per-OS remote access setup (RDP / xrdp / SSH) — dipakai semua workflow baru
-    ├── setup-cloudflare/     # cloudflared per-OS + start tunnel
-    ├── setup-ngrok/          # ngrok v3 per-OS + TCP tunnel
-    ├── setup-tailscale/      # Tailscale per-OS + join tailnet
-    ├── setup-zerotier/       # ZeroTier per-OS + join network
-    ├── setup-bore/           # Download prebuilt bore + open public TCP tunnel
-    ├── setup-wireguard/      # Generate keypair + bring up wg0 peer
-    └── setup-frp/            # Download frpc + register TCP proxy
+    ├── setup-rdp/            # Per-OS remote access setup (RDP / xrdp / SSH)
+    ├── setup-zerotier/       # ZeroTier per-OS + join network  ← dipakai rdp-zerotier.yml
+    ├── setup-cloudflare/     # cloudflared per-OS + start tunnel  ← belum dipakai
+    ├── setup-ngrok/          # ngrok v3 per-OS + TCP tunnel       ← belum dipakai
+    └── setup-tailscale/      # Tailscale per-OS + join tailnet   ← belum dipakai
 ```
 
 > **Satu action per metode tunnel**, plus `setup-rdp` sebagai primitif bersama yang dipakai
-> keempat workflow baru (Windows RDP / Linux xrdp / macOS SSH).
+> workflow baru (Windows RDP / Linux xrdp / macOS SSH).
 
 > ⚠️ **Catatan penting — action yang belum terpakai:**
 > `setup-cloudflare`, `setup-ngrok`, dan `setup-tailscale` **belum direferensikan workflow mana pun**,
@@ -557,7 +480,21 @@ PR welcome untuk:
 > dieksekusi**. Jangan dianggap sudah teruji.
 >
 > Workflow legacy sengaja dibiarkan apa adanya — kalau menambah metode tunnel baru,
-> ikuti pola `rdp-bore.yml` (paling sederhana), jangan sentuh yang legacy kecuali ada bug nyata.
+> ikuti pola `rdp-zerotier.yml`, jangan sentuh yang legacy kecuali ada bug nyata.
+
+### ✅ Apa yang sudah diverifikasi di runner sungguhan
+
+Pengujian dilakukan dengan menjalankan workflow di GitHub-hosted runner sungguhan
+bukan hanya validasi statis:
+
+| Kombinasi | Hasil |
+|---|---|
+| `windows-latest` + RDP + Ngrok | ✅ port 3389 listen |
+| `ubuntu-latest` + xrdp + Ngrok | ✅ port 3389 listen |
+| `ubuntu-latest` + SSH + Ngrok | ✅ `SSH-2.0-OpenSSH_9.6p1 Ubuntu` |
+| `macos-latest` + SSH + Ngrok | ✅ port 22 listen |
+
+`setup-rdp` terverifikasi di keempat kombinasi. Tunnel ZeroTier belum diuji end-to-end.
 
 ---
 

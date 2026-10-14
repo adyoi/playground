@@ -21,6 +21,15 @@ on:
           - ubuntu-latest
           - macos-latest
         default: 'windows-latest'
+      protocol:
+        description: 'Remote access protocol. auto = RDP on Windows/Linux, SSH on macOS'
+        required: false
+        type: choice
+        options:
+          - auto
+          - rdp
+          - ssh
+        default: 'auto'
 
 permissions:
   contents: read
@@ -55,6 +64,7 @@ jobs:
           username: RDP
           custom_password: ${{ github.event.inputs.custom_password }}
           firewall_rule: RDP-ZeroTier
+          protocol: ${{ github.event.inputs.protocol }}
 
       - name: 🪐 Install & Join ZeroTier
         id: vpn
@@ -85,15 +95,18 @@ jobs:
           SSH_KEY: ${{ steps.access.outputs.ssh_private_key }}
         run: |
           echo ""
-          echo "🎯 === RDP ACCESS INFO (ZEROTIER) === 🎯"
+          echo "🎯 === REMOTE ACCESS INFO (ZEROTIER) === 🎯"
           echo "💻 Computer: ${VPN_IP}:${PORT}"
-          echo "👤 Username: ${USERNAME}"
           if [ "$PROTOCOL" = "ssh" ]; then
-            echo "🔑 Auth: SSH key (lihat di bawah)"
+            echo "👤 Username: runner  (user bawaan runner, bukan user RDP)"
+            echo "🔑 Auth: SSH private key"
+            echo ""
+            echo "   Contoh: ssh -i playground_key -p ${PORT} runner@${VPN_IP}"
             echo ""
             echo "🔐 PRIVATE KEY - simpan aman, hapus log run setelah dipakai:"
             echo "${SSH_KEY}"
           else
+            echo "👤 Username: ${USERNAME}"
             echo "🔑 Password: ${PASSWORD}"
           fi
           echo "================================="
@@ -101,8 +114,12 @@ jobs:
           echo "1️⃣ Install ZeroTier: https://www.zerotier.com/download/"
           echo "2️⃣ Login ke akun ZeroTier yang memiliki network ${ZT_NETWORK}"
           echo "3️⃣ Tunggu status Connected di ZeroTier client"
-          echo "4️⃣ Buka Remote Desktop Connection (mstsc) -> ${VPN_IP}:${PORT}"
-          echo "===================================== "
+          if [ "$PROTOCOL" = "ssh" ]; then
+            echo "4️⃣ Terminal: ssh -i <file-private-key> -p ${PORT} runner@${VPN_IP}"
+          else
+            echo "4️⃣ Remote Desktop Connection (mstsc) -> ${VPN_IP}:${PORT}"
+          fi
+          echo "====================================="
           echo ""
 
           for i in $(seq 1 340); do

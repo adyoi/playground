@@ -1,0 +1,9 @@
+# GitHub Actions runs shell scripts with `bash` even on Windows runners, and bash
+# cannot parse CRLF line endings. Force LF for workflow/action definitions so the
+# `run:` blocks stay executable regardless of the runner's core.autocrlf setting.
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+
+# Keep the default for the rest of the repo.
+*.md   text

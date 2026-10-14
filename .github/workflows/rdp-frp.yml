@@ -1,0 +1,116 @@
+name: Playground RDP (frp)
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_addr:
+        description: 'Public address of your frps server (required)'
+        required: true
+        type: string
+      server_port:
+        description: 'frps bind port'
+        required: false
+        type: string
+        default: '7000'
+      auth_token:
+        description: 'Auth token configured on your frps server (required)'
+        required: true
+        type: string
+      remote_port:
+        description: 'Port to open on the frps server for RDP'
+        required: false
+        type: string
+        default: '33890'
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 350
+    steps:
+      - name: 📋 Display Configuration Info
+        shell: bash
+        run: |
+          echo "🔧 === PLAYGROUND RDP - FRP === 🔧"
+          echo "📦 Repository: ${{ github.repository }}"
+          echo "🆔 Run ID: ${{ github.run_id }}"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "🖥️  Runner OS: ${RUNNER_OS}"
+          echo "🖧  frps: ${{ github.event.inputs.server_addr }}:${{ github.event.inputs.server_port }}"
+          echo "=================================="
+
+      - name: ⚙️ Setup Remote Access
+        id: access
+        uses: ./.github/actions/setup-rdp
+        with:
+          username: RDP
+          custom_password: ${{ github.event.inputs.custom_password }}
+          firewall_rule: RDP-FRP
+
+      - name: 🔗 Install frpc & Register Proxy
+        id: tunnel
+        uses: ./.github/actions/setup-frp
+        with:
+          server_addr: ${{ github.event.inputs.server_addr }}
+          server_port: ${{ github.event.inputs.server_port }}
+          auth_token: ${{ github.event.inputs.auth_token }}
+          local_port: ${{ steps.access.outputs.port }}
+          remote_port: ${{ github.event.inputs.remote_port }}
+
+      - name: 📋 Display RDP Access Info
+        shell: bash
+        env:
+          PROTOCOL: ${{ steps.access.outputs.protocol }}
+          PORT: ${{ steps.access.outputs.port }}
+          ENDPOINT: ${{ steps.tunnel.outputs.public_endpoint }}
+          USERNAME: ${{ steps.access.outputs.username }}
+          PASSWORD: ${{ steps.access.outputs.password }}
+          SSH_KEY: ${{ steps.access.outputs.ssh_private_key }}
+        run: |
+          ADDRESS="${ENDPOINT:-<cek log step frpc>}"
+
+          echo ""
+          echo "🎯 === RDP ACCESS INFO (FRP) === 🎯"
+          echo "💻 Computer: ${ADDRESS}"
+          echo "👤 Username: ${USERNAME}"
+          if [ "$PROTOCOL" = "ssh" ]; then
+            echo "🔑 Auth: SSH key (lihat di bawah)"
+            echo ""
+            echo "🔐 PRIVATE KEY - simpan aman, hapus log run setelah dipakai:"
+            echo "${SSH_KEY}"
+          else
+            echo "🔑 Password: ${PASSWORD}"
+          fi
+          echo "================"
+          echo "📱 Cara Menyambung dari Devices Anda:"
+          echo "1️⃣ Buka Remote Desktop Connection (mstsc), masukan Computer di atas"
+          echo "=================================="
+          echo ""
+
+          for i in $(seq 1 340); do
+            echo "🟢 [$(date '+%Y-%m-%d %H:%M:%S')] Remote access active via frp"
+            sleep 60
+          done
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        shell: bash
+        run: |
+          echo "🧹 Cleaning up frpc..."
+          pkill -f "frpc" 2>/dev/null || true
+          echo "✅ Cleanup completed"

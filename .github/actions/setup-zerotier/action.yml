@@ -1,0 +1,108 @@
+name: 'Setup ZeroTier Mesh VPN'
+description: 'Install ZeroTier on the current runner OS and join a network, returning the assigned managed address.'
+
+inputs:
+  network_id:
+    description: 'ZeroTier network ID (16 hex characters) from my.zerotier.com'
+    required: true
+
+outputs:
+  ip:
+    description: 'ZeroTier managed IPv4 address of this runner'
+    value: ${{ steps.vpn.outputs.ip }}
+
+runs:
+  using: composite
+  steps:
+    - id: vpn
+      shell: bash
+      env:
+        ZEROTIER_NETWORK_ID: ${{ inputs.network_id }}
+      run: |
+        set -uo pipefail
+
+        if [ -z "$ZEROTIER_NETWORK_ID" ]; then
+          echo "❌ Network ID ZeroTier kosong." >&2
+          exit 1
+        fi
+
+        resolve_cli() {
+          for candidate in \
+            "/c/Program Files (x86)/ZeroTier/One/zerotier-cli.exe" \
+            "/c/Program Files/ZeroTier/One/zerotier-cli.exe" \
+            "/Library/Application Support/ZeroTier/One/zerotier-cli" \
+            "/var/lib/zerotier-one/zerotier-cli"; do
+            [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+          done
+          command -v zerotier-cli 2>/dev/null && return 0
+          return 1
+        }
+
+        case "${RUNNER_OS}" in
+          Windows)
+            echo "🪟 Installing ZeroTier (Windows)..."
+            MSI="$RUNNER_TEMP/zerotier.msi"
+            # /dist/ is the stable "latest" path; the versioned RELEASES/ path
+            # (ZeroTier_Networks_x64.msi) returns 404 and must not be used.
+            curl -sSL -o "$MSI" "https://download.zerotier.com/dist/ZeroTierOne.msi" || {
+              echo "❌ Gagal mengunduh installer ZeroTier" >&2; exit 1; }
+            powershell -NoProfile -Command "Start-Process msiexec -ArgumentList '/i','$MSI','/qn','/norestart' -Wait" >/dev/null
+            rm -f "$MSI"
+            ;;
+          Linux|macOS)
+            echo "🪐 Installing ZeroTier ($RUNNER_OS)..."
+            curl -fsSL https://install.zerotier.com | sudo sh || {
+              echo "❌ Install script ZeroTier gagal" >&2; exit 1; }
+            ;;
+          *) echo "❌ Unsupported RUNNER_OS: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        ZT="$(resolve_cli)" || {
+          echo "❌ Binary zerotier-cli tidak ditemukan setelah install." >&2
+          echo "   Cari manual:" >&2
+          echo "   Windows: 'C:\Program Files (x86)\ZeroTier\One\zerotier-cli.exe'" >&2
+          echo "   Linux:   /var/lib/zerotier-one/zerotier-cli" >&2
+          exit 1
+        }
+        echo "📍 zerotier-cli: $ZT"
+
+        echo "🔗 Joining network ${ZEROTIER_NETWORK_ID}..."
+        sudo "$ZT" join "$ZEROTIER_NETWORK_ID" 2>&1 | tee "$RUNNER_TEMP/zt-join.log" || true
+
+        dump_state() {
+          echo "---- zerotier-cli info ----" >&2
+          sudo "$ZT" info 2>&1 | head -n 30 >&2 || true
+          echo "---- zerotier-cli listnetworks ----" >&2
+          sudo "$ZT" listnetworks 2>&1 | head -n 60 >&2 || true
+          echo "---------------------------" >&2
+        }
+
+        # Tolerant parser (see parse_ip.py): accepts several JSON field spellings,
+        # skips the 999.x placeholder range, and falls back to scraping the
+        # human-readable listnetworks output.
+        get_ip() {
+          sudo "$ZT" -j listnetworks 2>/dev/null \
+            | python3 "$GITHUB_ACTION_PATH/parse_ip.py" "$ZEROTIER_NETWORK_ID" 2>/dev/null \
+            | tr -d '\r\n '
+        }
+
+        ZT_IP=""
+        for _ in $(seq 1 24); do
+          ZT_IP="$(get_ip)"
+          [ -n "$ZT_IP" ] && break
+          sleep 5
+        done
+
+        if [ -z "$ZT_IP" ]; then
+          echo "" >&2
+          dump_state
+          echo "❌ Node belum dapat IP ZeroTier dalam 2 menit." >&2
+          echo "   Penyebab paling umum: network Access type = Private butuh otorisasi manual." >&2
+          echo "   1. Buka https://my.zerotier.com -> Actions -> Machines" >&2
+          echo "   2. Cari node 'gh-runner-*', klik Authorize" >&2
+          echo "   3. Jalankan ulang workflow ini" >&2
+          exit 1
+        fi
+
+        echo "ip=${ZT_IP}" >> "$GITHUB_OUTPUT"
+        echo "🌐 ZeroTier IP: ${ZT_IP}"

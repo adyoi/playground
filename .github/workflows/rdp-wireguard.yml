@@ -1,0 +1,133 @@
+name: Playground RDP (WireGuard)
+
+on:
+  workflow_dispatch:
+    inputs:
+      hub_public_key:
+        description: 'WireGuard public key of your hub server (required)'
+        required: true
+        type: string
+      hub_endpoint:
+        description: 'Hub endpoint, e.g. vpn.example.com:51820 (required)'
+        required: true
+        type: string
+      tunnel_address:
+        description: 'Address for this runner inside the tunnel'
+        required: false
+        type: string
+        default: '10.8.0.2/32'
+      hub_address:
+        description: 'Address of the hub inside the tunnel (AllowedIPs)'
+        required: false
+        type: string
+        default: '10.8.0.1/32'
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 350
+    steps:
+      - name: 📋 Display Configuration Info
+        shell: bash
+        run: |
+          echo "🔧 === PLAYGROUND RDP - WIREGUARD === 🔧"
+          echo "📦 Repository: ${{ github.repository }}"
+          echo "🆔 Run ID: ${{ github.run_id }}"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "🖥️  Runner OS: ${RUNNER_OS}"
+          echo "🔑 Hub: ${{ github.event.inputs.hub_endpoint }}"
+          echo "=================================="
+
+      - name: ⚙️ Setup Remote Access
+        id: access
+        uses: ./.github/actions/setup-rdp
+        with:
+          username: RDP
+          custom_password: ${{ github.event.inputs.custom_password }}
+          firewall_rule: RDP-WireGuard
+
+      - name: 🔐 Bring Up WireGuard Interface
+        id: vpn
+        uses: ./.github/actions/setup-wireguard
+        with:
+          hub_public_key: ${{ github.event.inputs.hub_public_key }}
+          hub_endpoint: ${{ github.event.inputs.hub_endpoint }}
+          tunnel_address: ${{ github.event.inputs.tunnel_address }}
+          hub_address: ${{ github.event.inputs.hub_address }}
+
+      - name: 📋 Display RDP Access Info
+        shell: bash
+        env:
+          PROTOCOL: ${{ steps.access.outputs.protocol }}
+          PORT: ${{ steps.access.outputs.port }}
+          TUNNEL_IP: ${{ github.event.inputs.tunnel_address }}
+          WG_PUBLIC_KEY: ${{ steps.vpn.outputs.public_key }}
+          USERNAME: ${{ steps.access.outputs.username }}
+          PASSWORD: ${{ steps.access.outputs.password }}
+          SSH_KEY: ${{ steps.access.outputs.ssh_private_key }}
+        run: |
+          # Strip the CIDR suffix so the address can be pasted straight into mstsc.
+          TUNNEL_IP_PLAIN="${TUNNEL_IP%%/*}"
+
+          echo ""
+          echo "🎯 === RDP ACCESS INFO (WIREGUARD) === 🎯"
+          echo ""
+          echo "⚠️  LANGKAH 1 - daftarkan runner ini sebagai peer di hub Anda:"
+          echo "   PublicKey runner : ${WG_PUBLIC_KEY}"
+          echo "   AllowedIPs      : ${TUNNEL_IP}"
+          echo "   (tambahkan blok ini ke wg0.conf di hub, lalu reload: wg syncconf wg0 <(wg-quick strip wg0))"
+          echo ""
+          echo "⚠️  LANGKAH 2 - di device klien Anda, hubungkan ke mesh yang sama," 
+          echo "   lalu pakai alamat di bawah:"
+          echo ""
+          echo "💻 Computer: ${TUNNEL_IP_PLAIN}:${PORT}"
+          echo "👤 Username: ${USERNAME}"
+          if [ "$PROTOCOL" = "ssh" ]; then
+            echo "🔑 Auth: SSH key (lihat di bawah)"
+            echo ""
+            echo "🔐 PRIVATE KEY - simpan aman, hapus log run setelah dipakai:"
+            echo "${SSH_KEY}"
+          else
+            echo "🔑 Password: ${PASSWORD}"
+          fi
+          echo "==============================="
+          echo "📱 Cara Menyambung dari Devices Anda:"
+          echo "1️⃣ Install WireGuard di device klien"
+          echo "2️⃣ Import konfigurasi mesh hub Anda"
+          echo "3️⃣ Pastikan ${TUNNEL_IP%%/*} bisa dijangkau (ping/AllowedIPs)"
+          echo "4️⃣ Buka mstsc -> ${TUNNEL_IP_PLAIN}:${PORT}"
+          echo "====================================="
+          echo ""
+
+          for i in $(seq 1 340); do
+            echo "🟢 [$(date '+%Y-%m-%d %H:%M:%S')] Remote access active via WireGuard"
+            sleep 60
+          done
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        shell: bash
+        run: |
+          echo "🧹 Cleaning up WireGuard..."
+          if [ -x "/c/Program Files/WireGuard/wireguard.exe" ]; then
+            "/c/Program Files/WireGuard/wireguard.exe" /uninstalltunnels wg0 2>/dev/null || true
+          else
+            sudo wg-quick down wg0 2>/dev/null || true
+          fi
+          echo "✅ Cleanup completed"

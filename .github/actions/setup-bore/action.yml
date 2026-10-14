@@ -1,0 +1,118 @@
+name: 'Setup bore Tunnel'
+description: 'Download the prebuilt bore binary for the current runner OS/arch and open a public TCP tunnel to the local remote-access port.'
+
+inputs:
+  port:
+    description: 'Local TCP port to expose'
+    required: true
+  server:
+    description: 'Remote bore server address'
+    required: false
+    default: 'bore.pub'
+  secret:
+    description: 'Optional shared secret required by a self-hosted bore server'
+    required: false
+    default: ''
+
+outputs:
+  public_endpoint:
+    description: 'Public endpoint (host:port) assigned by the bore server'
+    value: ${{ steps.tunnel.outputs.public_endpoint }}
+  pid:
+    description: 'PID of the running bore process'
+    value: ${{ steps.tunnel.outputs.pid }}
+
+runs:
+  using: composite
+  steps:
+    - id: tunnel
+      shell: bash
+      env:
+        TUNNEL_PORT: ${{ inputs.port }}
+        BORE_SERVER: ${{ inputs.server }}
+        BORE_SECRET: ${{ inputs.secret }}
+      run: |
+        set -uo pipefail
+
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64|amd64) ARCH_NAME="x86_64" ;;
+          aarch64|arm64) ARCH_NAME="aarch64" ;;
+          *) echo "❌ Unsupported arch: $ARCH" >&2; exit 1 ;;
+        esac
+
+        case "${RUNNER_OS}" in
+          Windows) TARGET="${ARCH_NAME}-pc-windows-msvc";  ARCHIVE="zip" ;;
+          Linux)   TARGET="${ARCH_NAME}-unknown-linux-musl"; ARCHIVE="tar.gz" ;;
+          macOS)   TARGET="${ARCH_NAME}-apple-darwin";       ARCHIVE="tar.gz" ;;
+          *) echo "❌ Unsupported RUNNER_OS: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        # Resolve the latest release tag so the asset name can be built without
+        # pinning a version that would silently rot.
+        TAG="$(curl -sS --max-time 30 -H 'Accept: application/vnd.github+json' \
+          https://api.github.com/repos/ekzhang/bore/releases/latest \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
+        [ -z "$TAG" ] && TAG="v0.6.0"
+        VERSION="${TAG#v}"
+        echo "📦 bore ${TAG} (${RUNNER_OS}/${TARGET})"
+
+        WORKDIR="$RUNNER_TEMP/bore"
+        mkdir -p "$WORKDIR"
+        FILE="bore-${VERSION}-${TARGET}.${ARCHIVE}"
+        URL="https://github.com/ekzhang/bore/releases/download/${TAG}/${FILE}"
+
+        if [ "$ARCHIVE" = "zip" ]; then
+          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          unzip -o -q "$WORKDIR/$FILE" -d "$WORKDIR"
+        else
+          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          tar -xzf "$WORKDIR/$FILE" -C "$WORKDIR"
+        fi
+
+        BORE_BIN="$WORKDIR/bore"
+        [ "${RUNNER_OS}" = "Windows" ] && BORE_BIN="$WORKDIR/bore.exe"
+        if [ ! -f "$BORE_BIN" ]; then
+          echo "❌ Gagal mengunduh bore: $URL" >&2
+          exit 1
+        fi
+        chmod +x "$BORE_BIN"
+
+        ARGS=(local "$TUNNEL_PORT" --to "$BORE_SERVER")
+        [ -n "$BORE_SECRET" ] && ARGS+=(--secret "$BORE_SECRET")
+
+        echo "🕳️  Starting bore tunnel -> localhost:${TUNNEL_PORT} via ${BORE_SERVER}"
+        nohup "$BORE_BIN" "${ARGS[@]}" >"$RUNNER_TEMP/bore.log" 2>&1 &
+        TUNNEL_PID=$!
+        sleep 15
+
+        if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+          echo "❌ bore berhenti saat start. Log:" >&2
+          cat "$RUNNER_TEMP/bore.log" >&2
+          exit 1
+        fi
+
+        # bore's exact log wording is not a stable API, so try several shapes
+        # before giving up and dumping the raw log for diagnosis.
+        REMOTE_PORT=""
+        for _ in $(seq 1 10); do
+          REMOTE_PORT="$(grep -oiE 'listening at [^ ]+' "$RUNNER_TEMP/bore.log" 2>/dev/null \
+            | tail -n1 | grep -oE '[0-9]+$' || true)"
+          [ -z "$REMOTE_PORT" ] && REMOTE_PORT="$(grep -oiE 'remote[_ ]?port[=: ]+[0-9]+' "$RUNNER_TEMP/bore.log" 2>/dev/null \
+            | tail -n1 | grep -oE '[0-9]+' || true)"
+          [ -n "$REMOTE_PORT" ] && break
+          sleep 3
+        done
+
+        if [ -z "$REMOTE_PORT" ]; then
+          echo "" >&2
+          echo "⚠️  Port remote tidak ter-parse dari log bore. Raw log:" >&2
+          cat "$RUNNER_TEMP/bore.log" >&2
+          echo "💡 Tunnel kemungkinan SUDAH aktif - cari baris 'listening at' di atas," >&2
+          echo "   lalu pakai bore.pub:<PORT> manual di mstsc." >&2
+        else
+          echo "✅ bore aktif -> ${BORE_SERVER}:${REMOTE_PORT}"
+        fi
+
+        echo "pid=${TUNNEL_PID}" >> "$GITHUB_OUTPUT"
+        echo "public_endpoint=${BORE_SERVER}:${REMOTE_PORT}" >> "$GITHUB_OUTPUT"

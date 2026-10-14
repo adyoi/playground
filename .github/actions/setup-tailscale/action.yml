@@ -1,0 +1,87 @@
+name: 'Setup Tailscale Mesh VPN'
+description: 'Install Tailscale on the current runner OS/arch and join a tailnet, returning the assigned 100.x address.'
+
+inputs:
+  auth_key:
+    description: 'Tailscale auth key (reusable + ephemeral + pre-approved)'
+    required: true
+  hostname:
+    description: 'Hostname to advertise on the tailnet'
+    required: true
+
+outputs:
+  ip:
+    description: 'Tailscale IPv4 address of this runner'
+    value: ${{ steps.vpn.outputs.ip }}
+
+runs:
+  using: composite
+  steps:
+    - id: vpn
+      shell: bash
+      env:
+        TAILSCALE_AUTH_KEY: ${{ inputs.auth_key }}
+        TAILSCALE_HOSTNAME: ${{ inputs.hostname }}
+      run: |
+        set -uo pipefail
+
+        if [ -z "$TAILSCALE_AUTH_KEY" ]; then
+          echo "❌ TAILSCALE_AUTH_KEY kosong. Isi GitHub Secrets terlebih dahulu." >&2
+          exit 1
+        fi
+
+        resolve_cli() {
+          for candidate in \
+            "/c/Program Files/Tailscale/Tailscale.exe" \
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale" \
+            "/usr/bin/tailscale" \
+            "/usr/sbin/tailscale"; do
+            [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+          done
+          command -v tailscale 2>/dev/null && return 0
+          return 1
+        }
+
+        case "${RUNNER_OS}" in
+          Windows)
+            echo "🦎 Installing Tailscale (Windows)..."
+            INSTALLER="$RUNNER_TEMP/tailscale-setup.exe"
+            curl -sSL -o "$INSTALLER" "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
+            powershell -NoProfile -Command "Start-Process -FilePath '$INSTALLER' -ArgumentList '/quiet','/norestart' -Wait" >/dev/null
+            rm -f "$INSTALLER"
+            ;;
+          Linux)
+            echo "🦎 Installing Tailscale (Linux)..."
+            curl -fsSL https://tailscale.com/install.sh | sudo bash
+            ;;
+          macOS)
+            echo "🦎 Installing Tailscale (macOS)..."
+            curl -fsSL https://tailscale.com/install.sh | bash
+            ;;
+          *) echo "❌ Unsupported RUNNER_OS: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        TS="$(resolve_cli)" || { echo "❌ Binary tailscale tidak ditemukan setelah install" >&2; exit 1; }
+        echo "📍 tailscale CLI: $TS"
+
+        echo "🔗 Joining tailnet as ${TAILSCALE_HOSTNAME}..."
+        if ! sudo "$TS" up --authkey="$TAILSCALE_AUTH_KEY" --hostname="$TAILSCALE_HOSTNAME" --accept-routes 2>&1; then
+          echo "❌ Gagal join tailnet. Pastikan auth key = Reusable + Ephemeral + Pre-approved." >&2
+          exit 1
+        fi
+
+        TS_IP=""
+        for _ in $(seq 1 20); do
+          TS_IP="$(sudo "$TS" ip -4 2>/dev/null | head -n1 | tr -d '\r\n ')"
+          [ -n "$TS_IP" ] && break
+          sleep 5
+        done
+
+        if [ -z "$TS_IP" ]; then
+          echo "❌ Tailscale IP tidak ditemukan setelah 20 percobaan." >&2
+          sudo "$TS" status >&2 || true
+          exit 1
+        fi
+
+        echo "ip=${TS_IP}" >> "$GITHUB_OUTPUT"
+        echo "🌐 Tailscale IP: ${TS_IP}"

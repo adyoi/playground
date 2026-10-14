@@ -1,0 +1,92 @@
+name: 'Setup Ngrok Tunnel'
+description: 'Download ngrok v3 for the current runner OS/arch and open a TCP tunnel to the local remote-access port.'
+
+inputs:
+  port:
+    description: 'Local TCP port to expose'
+    required: true
+  token:
+    description: 'Ngrok authtoken'
+    required: true
+
+outputs:
+  public_url:
+    description: 'Public TCP endpoint (host:port), empty if the local API was unreachable'
+    value: ${{ steps.tunnel.outputs.public_url }}
+  pid:
+    description: 'PID of the running ngrok process'
+    value: ${{ steps.tunnel.outputs.pid }}
+
+runs:
+  using: composite
+  steps:
+    - id: tunnel
+      shell: bash
+      env:
+        TUNNEL_PORT: ${{ inputs.port }}
+        NGROK_AUTH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -uo pipefail
+
+        if [ -z "$NGROK_AUTH_TOKEN" ]; then
+          echo "❌ NGROK_AUTH_TOKEN kosong. Isi GitHub Secrets terlebih dahulu." >&2
+          exit 1
+        fi
+
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64|amd64) GOARCH="amd64" ;;
+          aarch64|arm64) GOARCH="arm64" ;;
+          *) echo "❌ Unsupported arch: $ARCH" >&2; exit 1 ;;
+        esac
+
+        case "${RUNNER_OS}" in
+          Windows) PLATFORM="windows" ;;
+          Linux)   PLATFORM="linux" ;;
+          macOS)   PLATFORM="darwin" ;;
+          *) echo "❌ Unsupported RUNNER_OS: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        WORKDIR="$RUNNER_TEMP/ngrok"
+        mkdir -p "$WORKDIR"
+        ZIP="$WORKDIR/ngrok.zip"
+        curl -sSL -o "$ZIP" "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${PLATFORM}-${GOARCH}.zip"
+        unzip -o -q "$ZIP" -d "$WORKDIR"
+
+        NGROK_BIN="$WORKDIR/ngrok"
+        [ "${RUNNER_OS}" = "Windows" ] && NGROK_BIN="$WORKDIR/ngrok.exe"
+        if [ ! -f "$NGROK_BIN" ]; then
+          echo "❌ Gagal mengunduh ngrok untuk $RUNNER_OS/$GOARCH" >&2
+          exit 1
+        fi
+        chmod +x "$NGROK_BIN"
+
+        "$NGROK_BIN" config add-authtoken "$NGROK_AUTH_TOKEN" >/dev/null
+
+        echo "🔗 Starting ngrok TCP tunnel -> localhost:${TUNNEL_PORT}"
+        nohup "$NGROK_BIN" tcp "$TUNNEL_PORT" --log=stdout >"$RUNNER_TEMP/ngrok.log" 2>&1 &
+        TUNNEL_PID=$!
+        sleep 15
+
+        if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+          echo "❌ ngrok berhenti saat start. Log:" >&2
+          cat "$RUNNER_TEMP/ngrok.log" >&2
+          exit 1
+        fi
+
+        PUBLIC_URL=""
+        if API_JSON="$(curl -s --max-time 10 http://localhost:4040/api/tunnels 2>/dev/null)"; then
+          PUBLIC_URL="$(printf '%s' "$API_JSON" \
+            | tr ',' '\n' \
+            | grep -o '"public_url":"tcp://[^"]*"' \
+            | head -n1 \
+            | sed 's/.*tcp:\/\///; s/"$//')" || true
+        fi
+
+        echo "pid=${TUNNEL_PID}" >> "$GITHUB_OUTPUT"
+        echo "public_url=${PUBLIC_URL}" >> "$GITHUB_OUTPUT"
+        if [ -n "$PUBLIC_URL" ]; then
+          echo "✅ Ngrok aktif -> ${PUBLIC_URL}"
+        else
+          echo "⚠️  Ngrok aktif tapi public URL tidak terbaca dari API. Cek log run."
+        fi

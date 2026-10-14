@@ -1,0 +1,184 @@
+name: 'Setup Remote Access'
+description: >-
+  Enable remote access on the runner. Windows -> native RDP (3389), Linux -> xrdp (3389),
+  macOS -> SSH (22). Creates a login user and returns the password/credentials as outputs.
+  Non-fatal sub-steps are tolerated so a cosmetic service hiccup does not fail the whole job.
+
+inputs:
+  username:
+    description: 'Login username to create'
+    required: false
+    default: 'RDP'
+  custom_password:
+    description: 'Password for the login user. Auto-generated when empty.'
+    required: false
+    default: ''
+  firewall_rule:
+    description: 'Name of the firewall rule to create'
+    required: false
+    default: 'RDP-Playground'
+
+outputs:
+  username:
+    description: 'Username to use from the client'
+    value: ${{ steps.setup.outputs.username }}
+  password:
+    description: 'Password for the login user'
+    value: ${{ steps.setup.outputs.password }}
+  protocol:
+    description: 'Remote access protocol exposed by this runner (rdp or ssh)'
+    value: ${{ steps.setup.outputs.protocol }}
+  port:
+    description: 'TCP port exposed by this runner'
+    value: ${{ steps.setup.outputs.port }}
+  ssh_private_key:
+    description: 'PEM private key (macOS only, empty elsewhere)'
+    value: ${{ steps.setup.outputs.ssh_private_key }}
+
+runs:
+  using: composite
+  steps:
+    - id: setup
+      shell: bash
+      env:
+        RDP_USERNAME: ${{ inputs.username }}
+        RDP_CUSTOM_PASSWORD: ${{ inputs.custom_password }}
+        FIREWALL_RULE: ${{ inputs.firewall_rule }}
+      run: |
+        set -uo pipefail
+
+        USER_NAME="${RDP_USERNAME:-RDP}"
+        PROTOCOL="rdp"
+        PORT="3389"
+        SSH_KEY=""
+        NOTES=""
+
+        gen_password() {
+          # Random alnum core + a guaranteed upper/lower/digit/special suffix so the
+          # result always satisfies Windows password-complexity rules.
+          local core
+          core="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)"
+          printf '%s%s' "$core" 'Aa1!'
+        }
+
+        PASSWORD="$RDP_CUSTOM_PASSWORD"
+        if [ -z "$PASSWORD" ]; then
+          PASSWORD="$(gen_password)"
+        fi
+
+        case "${RUNNER_OS}" in
+          Windows)
+            echo "🪟 Configuring native RDP (TermService)..."
+
+            # TermService may not be running yet; stopping is best-effort only.
+            net stop TermService /y >/dev/null 2>&1 || true
+
+            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f >/dev/null
+            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 1 /f >/dev/null
+            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 1 /f >/dev/null
+            # Allow multiple concurrent sessions (otherwise clients hit error 0x708).
+            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fSingleSessionPerUser /t REG_DWORD /d 0 /f >/dev/null
+            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v AllowRemoteRPC /t REG_DWORD /d 1 /f >/dev/null
+
+            netsh advfirewall firewall delete rule name="$FIREWALL_RULE" >/dev/null 2>&1 || true
+            netsh advfirewall firewall add rule name="$FIREWALL_RULE" dir=in action=allow protocol=TCP localport="$PORT" >/dev/null
+
+            if net user "$USER_NAME" "$PASSWORD" /add >/dev/null 2>&1; then
+              echo "✅ User $USER_NAME dibuat"
+            else
+              # Already exists -> just rotate the password.
+              net user "$USER_NAME" "$PASSWORD" >/dev/null 2>&1 || true
+              NOTES="$NOTES user-existed"
+            fi
+            net localgroup Administrators "$USER_NAME" >/dev/null 2>&1 || true
+            net localgroup "Remote Desktop Users" "$USER_NAME" >/dev/null 2>&1 || true
+            net user "$USER_NAME" /active:yes >/dev/null 2>&1 || true
+
+            # Starting TermService can fail on a runner with no interactive session.
+            # The listener usually comes up on demand, so treat a failure as a warning.
+            if net start TermService >/dev/null 2>&1; then
+              echo "✅ TermService running"
+            else
+              NOTES="$NOTES termservice-deferred"
+              echo "⚠️  net start TermService gagal -{andai listener tetap naik on-demand"
+            fi
+            ;;
+          Linux)
+            echo "🐧 Configuring xrdp..."
+            export DEBIAN_FRONTEND=noninteractive
+            sudo apt-get update -qq || { echo "❌ apt-get update gagal" >&2; exit 1; }
+            # --no-install-recommends keeps this from pulling in ~1GB of extras,
+            # which is the difference between "slow" and "install times out".
+            sudo apt-get install -y -qq --no-install-recommends xrdp xfce4 xfce4-terminal \
+              || { echo "❌ Install xrdp/xfce4 gagal" >&2; exit 1; }
+
+            # xrdp alone yields a black screen: it needs a desktop session backend.
+            # Must be written BEFORE useradd so it lands in the new user's home.
+            printf 'startxfce4\n' | sudo tee /etc/skel/.xsession >/dev/null
+            if [ ! -s /etc/xrdp/startwm.sh ]; then
+              printf '#!/bin/sh\nif [ -x /usr/bin/startxfce4 ]; then exec /usr/bin/startxfce4; fi\nexec /bin/sh /etc/X11/Xsession\n' \
+                | sudo tee /etc/xrdp/startwm.sh >/dev/null
+              sudo chmod +x /etc/xrdp/startwm.sh
+            fi
+
+            if ! id -u "$USER_NAME" >/dev/null 2>&1; then
+              sudo useradd -m -s /bin/bash "$USER_NAME"
+            else
+              NOTES="$NOTES user-existed"
+            fi
+            printf '%s:%s\n' "$USER_NAME" "$PASSWORD" | sudo chpasswd || true
+            sudo usermod -aG sudo "$USER_NAME" 2>/dev/null || true
+
+            # Also write the session file for a pre-existing user (skel is not reapplied).
+            USER_HOME="$(sudo getent passwd "$USER_NAME" | cut -d: -f6)"
+            if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
+              printf 'startxfce4\n' | sudo tee "$USER_HOME/.xsession" >/dev/null 2>&1 || true
+              sudo chown "$USER_NAME":"$USER_NAME" "$USER_HOME/.xsession" 2>/dev/null || true
+            fi
+
+            sudo ufw allow "$PORT"/tcp >/dev/null 2>&1 || true
+            sudo systemctl enable xrdp >/dev/null 2>&1 || true
+            if ! sudo systemctl restart xrdp >/dev/null 2>&1; then
+              NOTES="$NOTES systemctl-restart-failed"
+              echo "⚠️  systemctl restart xrdp gagal, coba jalankan xrdp langsung..."
+              sudo /usr/sbin/xrdp --daemon >/dev/null 2>&1 || true
+            fi
+            echo "✅ xrdp configured"
+            ;;
+          macOS)
+            # macOS runners have no attached console/display, so Screen Sharing (VNC/RDP)
+            # cannot render a session. SSH is the working remote-access path here.
+            echo "🍎 Configuring SSH (macOS runners have no console session for Screen Sharing)..."
+            PROTOCOL="ssh"
+            PORT="22"
+
+            KEY_PATH="$HOME/.ssh/playground_id_ed25519"
+            mkdir -p "$HOME/.ssh"
+            chmod 700 "$HOME/.ssh"
+            rm -f "$KEY_PATH" "$KEY_PATH.pub"
+            ssh-keygen -t ed25519 -N "" -C "playground-rdp" -f "$KEY_PATH" >/dev/null 2>&1
+            cat "$KEY_PATH.pub" >> "$HOME/.ssh/authorized_keys"
+            chmod 600 "$HOME/.ssh/authorized_keys"
+
+            sudo systemsetup -setremotelogin on >/dev/null 2>&1 \
+              || NOTES="$NOTES systemsetup-failed"
+            SSH_KEY="$(cat "$KEY_PATH")"
+            ;;
+          *)
+            echo "❌ Unsupported RUNNER_OS: ${RUNNER_OS}" >&2
+            exit 1
+            ;;
+        esac
+
+        {
+          echo "username=${USER_NAME}"
+          echo "password=${PASSWORD}"
+          echo "protocol=${PROTOCOL}"
+          echo "port=${PORT}"
+          echo "ssh_private_key<<GITHUB_EOF"
+          printf '%s\n' "$SSH_KEY"
+          echo "GITHUB_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "✅ Remote access ready -> protocol=${PROTOCOL} port=${PORT} user=${USER_NAME}"
+        [ -n "$NOTES" ] && echo "ℹ️  Non-fatal notes:${NOTES}"

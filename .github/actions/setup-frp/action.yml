@@ -1,0 +1,131 @@
+name: 'Setup frp Tunnel'
+description: 'Download the frp client for the current runner OS/arch and register a TCP proxy on a frps server you control (bring-your-own-server).'
+
+inputs:
+  server_addr:
+    description: 'Public address of your frps server'
+    required: true
+  server_port:
+    description: 'frps bind port'
+    required: false
+    default: '7000'
+  auth_token:
+    description: 'Auth token configured on your frps server'
+    required: true
+  local_port:
+    description: 'Local TCP port to expose (the RDP/xrdp port)'
+    required: true
+  remote_port:
+    description: 'Port opened on the frps server for this proxy'
+    required: true
+
+outputs:
+  public_endpoint:
+    description: 'Public endpoint (server_addr:remote_port) for the proxy'
+    value: ${{ steps.tunnel.outputs.public_endpoint }}
+
+runs:
+  using: composite
+  steps:
+    - id: tunnel
+      shell: bash
+      env:
+        FRP_SERVER_ADDR: ${{ inputs.server_addr }}
+        FRP_SERVER_PORT: ${{ inputs.server_port }}
+        FRP_AUTH_TOKEN: ${{ inputs.auth_token }}
+        FRP_LOCAL_PORT: ${{ inputs.local_port }}
+        FRP_REMOTE_PORT: ${{ inputs.remote_port }}
+      run: |
+        set -uo pipefail
+
+        if [ -z "$FRP_SERVER_ADDR" ] || [ -z "$FRP_AUTH_TOKEN" ]; then
+          echo "❌ server_addr dan auth_token wajib diisi." >&2
+          exit 1
+        fi
+
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64|amd64) GOARCH="amd64" ;;
+          aarch64|arm64) GOARCH="arm64" ;;
+          *) echo "❌ Unsupported arch: $ARCH" >&2; exit 1 ;;
+        esac
+
+        case "${RUNNER_OS}" in
+          Windows) FRP_OS="windows";  ARCHIVE="zip" ;;
+          Linux)   FRP_OS="linux";    ARCHIVE="tar.gz" ;;
+          macOS)   FRP_OS="darwin";   ARCHIVE="tar.gz" ;;
+          *) echo "❌ Unsupported RUNNER_OS: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        TAG="$(curl -sS --max-time 30 -H 'Accept: application/vnd.github+json' \
+          https://api.github.com/repos/fatedier/frp/releases/latest \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
+        [ -z "$TAG" ] && TAG="v0.71.1"
+        VERSION="${TAG#v}"
+        echo "📦 frp ${TAG} (${FRP_OS}/${GOARCH})"
+
+        WORKDIR="$RUNNER_TEMP/frp"
+        mkdir -p "$WORKDIR"
+        FILE="frp_${VERSION}_${FRP_OS}_${GOARCH}.${ARCHIVE}"
+        URL="https://github.com/fatedier/frp/releases/download/${TAG}/${FILE}"
+
+        if [ "$ARCHIVE" = "zip" ]; then
+          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          unzip -o -q "$WORKDIR/$FILE" -d "$WORKDIR"
+        else
+          curl -sSL -o "$WORKDIR/$FILE" "$URL"
+          tar -xzf "$WORKDIR/$FILE" -C "$WORKDIR"
+        fi
+
+        FRPC_BIN="$WORKDIR/frpc"
+        [ "${RUNNER_OS}" = "Windows" ] && FRPC_BIN="$WORKDIR/frpc.exe"
+        if [ ! -f "$FRPC_BIN" ]; then
+          echo "❌ Gagal mengunduh frpc: $URL" >&2
+          exit 1
+        fi
+        chmod +x "$FRPC_BIN"
+
+        CONFIG="$WORKDIR/frpc.toml"
+        # Built with printf rather than a heredoc: a heredoc terminator must sit at
+        # column 0, which would terminate this YAML block scalar early.
+        {
+          printf 'serverAddr = "%s"\n' "$FRP_SERVER_ADDR"
+          printf 'serverPort = %s\n' "$FRP_SERVER_PORT"
+          printf 'auth.token = "%s"\n' "$FRP_AUTH_TOKEN"
+          printf 'log.to = "console"\n'
+          printf 'log.level = "info"\n'
+          printf '\n[[proxies]]\n'
+          printf 'name = "playground-rdp"\n'
+          printf 'type = "tcp"\n'
+          printf 'localIP = "127.0.0.1"\n'
+          printf 'localPort = %s\n' "$FRP_LOCAL_PORT"
+          printf 'remotePort = %s\n' "$FRP_REMOTE_PORT"
+        } > "$CONFIG"
+
+        echo "🔗 Registering frp TCP proxy ${FRP_LOCAL_PORT} -> ${FRP_SERVER_ADDR}:${FRP_REMOTE_PORT}"
+        nohup "$FRPC_BIN" -c "$CONFIG" >"$RUNNER_TEMP/frpc.log" 2>&1 &
+        TUNNEL_PID=$!
+        sleep 20
+
+        if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+          echo "❌ frpc berhenti saat start. Log:" >&2
+          cat "$RUNNER_TEMP/frpc.log" >&2
+          exit 1
+        fi
+
+        # A log-wording mismatch must NOT fail the job: frp's log strings are not a
+        # stable API, and a false negative here would kill a working tunnel.
+        # The workflow's verify step (and the client itself) is the real judge.
+        if grep -qiE 'login to server success|start proxy success' "$RUNNER_TEMP/frpc.log"; then
+          echo "✅ frp login + proxy terdaftar"
+        else
+          echo "⚠️  Pola 'login success' tidak ditemukan di log frpc." >&2
+          echo "    Ini BUKAN otomatis berarti gagal - string log bisa berbeda versi." >&2
+          echo "---- raw frpc log ----" >&2
+          cat "$RUNNER_TEMP/frpc.log" >&2
+          echo "-----------------------" >&2
+        fi
+
+        ENDPOINT="${FRP_SERVER_ADDR}:${FRP_REMOTE_PORT}"
+        echo "public_endpoint=${ENDPOINT}" >> "$GITHUB_OUTPUT"
+        echo "✅ frp -> ${ENDPOINT}"

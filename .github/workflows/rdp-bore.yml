@@ -1,0 +1,116 @@
+name: Playground RDP (bore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
+      bore_server:
+        description: 'bore server (default: bore.pub, public & free)'
+        required: false
+        type: string
+        default: 'bore.pub'
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 350
+    steps:
+      - name: 📋 Display Configuration Info
+        shell: bash
+        run: |
+          echo "🔧 === PLAYGROUND RDP - BORE === 🔧"
+          echo "📦 Repository: ${{ github.repository }}"
+          echo "🆔 Run ID: ${{ github.run_id }}"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "🖥️  Runner OS: ${RUNNER_OS}"
+          echo "=================================="
+
+      - name: ⚙️ Setup Remote Access
+        id: access
+        uses: ./.github/actions/setup-rdp
+        with:
+          username: RDP
+          custom_password: ${{ github.event.inputs.custom_password }}
+          firewall_rule: RDP-Bore
+
+      - name: 🕳️ Install & Start bore Tunnel
+        id: tunnel
+        uses: ./.github/actions/setup-bore
+        with:
+          port: ${{ steps.access.outputs.port }}
+          server: ${{ github.event.inputs.bore_server }}
+
+      - name: ✅ Verify Connectivity
+        shell: bash
+        env:
+          PORT: ${{ steps.access.outputs.port }}
+        run: |
+          echo "🔍 Verifikasi port ${PORT} di runner..."
+          python3 -c "import socket,sys; s=socket.socket(); s.settimeout(5); sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1]))) == 0 else 1)" "$PORT" || {
+            echo "❌ Port ${PORT} tidak merespons di runner" >&2
+            exit 1
+          }
+          echo "✅ Port ${PORT} aktif"
+
+      - name: 📋 Display RDP Access Info
+        shell: bash
+        env:
+          PROTOCOL: ${{ steps.access.outputs.protocol }}
+          PORT: ${{ steps.access.outputs.port }}
+          ENDPOINT: ${{ steps.tunnel.outputs.public_endpoint }}
+          USERNAME: ${{ steps.access.outputs.username }}
+          PASSWORD: ${{ steps.access.outputs.password }}
+          SSH_KEY: ${{ steps.access.outputs.ssh_private_key }}
+        run: |
+          ADDRESS="${ENDPOINT:-<remote port gagal diparse, cek log step bore>}"
+
+          echo ""
+          echo "🎯 === RDP ACCESS INFO (BORE) === 🎯"
+          echo "💻 Computer: ${ADDRESS}"
+          echo "👤 Username: ${USERNAME}"
+          if [ "$PROTOCOL" = "ssh" ]; then
+            echo "🔑 Auth: SSH key (lihat di bawah)"
+            echo ""
+            echo "🔐 PRIVATE KEY - simpan aman, hapus log run setelah dipakai:"
+            echo "${SSH_KEY}"
+          else
+            echo "🔑 Password: ${PASSWORD}"
+          fi
+          echo "================"
+          echo "📱 Cara Menyambung dari Devices Anda:"
+          echo "1️⃣ Gak perlu install apa-apa di sisi client"
+          echo "2️⃣ Buka Remote Desktop Connection (mstsc), masukan Computer di atas"
+          echo "=================================="
+          echo ""
+          echo "⚠️  Endpoint bore.pub PUBLIK dan tanpa autentikasi tambahan."
+          echo "   Keamanan RDP Anda bergantung penuh pada password yang di-generate."
+          echo ""
+
+          for i in $(seq 1 340); do
+            echo "🟢 [$(date '+%Y-%m-%d %H:%M:%S')] Remote access active via bore"
+            sleep 60
+          done
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        shell: bash
+        run: |
+          echo "🧹 Cleaning up bore..."
+          pkill -f "bore local" 2>/dev/null || true
+          pkill -f "bore.exe" 2>/dev/null || true
+          echo "✅ Cleanup completed"

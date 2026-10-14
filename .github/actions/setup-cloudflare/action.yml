@@ -1,0 +1,79 @@
+name: 'Setup Cloudflare Tunnel'
+description: 'Download cloudflared for the current runner OS/arch and start a tunnel to the local remote-access port.'
+
+inputs:
+  port:
+    description: 'Local TCP port to expose'
+    required: true
+  token:
+    description: 'Cloudflare Tunnel token'
+    required: true
+
+outputs:
+  pid:
+    description: 'PID of the running cloudflared process'
+    value: ${{ steps.tunnel.outputs.pid }}
+
+runs:
+  using: composite
+  steps:
+    - id: tunnel
+      shell: bash
+      env:
+        TUNNEL_PORT: ${{ inputs.port }}
+        CLOUDFLARE_TUNNEL_TOKEN: ${{ inputs.token }}
+      run: |
+        set -uo pipefail
+
+        if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+          echo "❌ CLOUDFLARE_TUNNEL_TOKEN kosong. Isi GitHub Secrets terlebih dahulu." >&2
+          exit 1
+        fi
+
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64|amd64) GOARCH="amd64" ;;
+          aarch64|arm64) GOARCH="arm64" ;;
+          *) echo "❌ Unsupported arch: $ARCH" >&2; exit 1 ;;
+        esac
+
+        WORKDIR="$RUNNER_TEMP/cloudflared"
+        mkdir -p "$WORKDIR"
+        BIN="$WORKDIR/cloudflared"
+
+        case "${RUNNER_OS}" in
+          Windows)
+            curl -sSL -o "$BIN.exe" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-${GOARCH}.exe"
+            BIN="$BIN.exe"
+            ;;
+          Linux)
+            curl -sSL -o "$BIN" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${GOARCH}"
+            chmod +x "$BIN"
+            ;;
+          macOS)
+            curl -sSL -o "$WORKDIR/cloudflared.tgz" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${GOARCH}.tgz"
+            tar -xzf "$WORKDIR/cloudflared.tgz" -C "$WORKDIR"
+            chmod +x "$BIN"
+            ;;
+          *) echo "❌ Unsupported RUNNER_OS: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        if [ ! -f "$BIN" ]; then
+          echo "❌ Gagal mengunduh cloudflared untuk $RUNNER_OS/$GOARCH" >&2
+          exit 1
+        fi
+
+        echo "☁️  Starting Cloudflare Tunnel -> localhost:${TUNNEL_PORT}"
+        nohup "$BIN" tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN" \
+          >"$RUNNER_TEMP/cloudflared.log" 2>&1 &
+        TUNNEL_PID=$!
+        sleep 15
+
+        if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+          echo "❌ cloudflared berhenti saat start. Log:" >&2
+          cat "$RUNNER_TEMP/cloudflared.log" >&2
+          exit 1
+        fi
+
+        echo "pid=${TUNNEL_PID}" >> "$GITHUB_OUTPUT"
+        echo "✅ Cloudflare Tunnel aktif (pid ${TUNNEL_PID})"

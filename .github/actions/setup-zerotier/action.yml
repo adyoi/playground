@@ -51,8 +51,15 @@ runs:
             ;;
           Linux|macOS)
             echo "🪐 Installing ZeroTier ($RUNNER_OS)..."
-            curl -fsSL https://install.zerotier.com | sudo sh || {
-              echo "❌ Install script ZeroTier gagal" >&2; exit 1; }
+            # Must be bash, NOT sh: the install script uses bash-only constructs
+            # (declare -A associative arrays, [[ ]]), which on Ubuntu are dash
+            # and fail with "declare: not found" and a syntax error at the
+            # distro-detection step.
+            if ! curl -fsSL https://install.zerotier.com | sudo bash; then
+              echo "❌ Install script ZeroTier gagal" >&2
+              echo "   Domestic fallback: https://install.zerotier.com/?os=linux" >&2
+              exit 1
+            fi
             ;;
           *) echo "❌ Unsupported RUNNER_OS: $RUNNER_OS" >&2; exit 1 ;;
         esac

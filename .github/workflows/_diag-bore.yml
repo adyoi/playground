@@ -1,0 +1,111 @@
+name: DIAG bore connectivity
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: 'bore server host'
+        required: false
+        default: 'bore.pub'
+
+jobs:
+  diag:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: DNS + raw socket probe
+        shell: bash
+        env:
+          HOST: ${{ inputs.host }}
+        run: |
+          echo "### RUNNER_OS=${RUNNER_OS}"
+          echo "### getent ahosts:"
+          getent ahosts "$HOST" 2>/dev/null | head -5 || echo "(none)"
+          echo
+          echo "### TEST 1: connect, do NOT send, try to read for 12s"
+          python3 -c "import socket,sys
+h=sys.argv[1]
+try:
+    a=socket.gethostbyname(h)
+except Exception as e:
+    a=h
+print('resolved ->', a)
+s=socket.socket(); s.settimeout(12)
+try:
+    s.connect((a,7835))
+    print('TCP connect: OK')
+except Exception as e:
+    print('TCP connect: FAIL', e); sys.exit(0)
+try:
+    d=s.recv(256)
+    print('recv bytes =', len(d), repr(d[:80]))
+except socket.timeout:
+    print('recv: TIMEOUT (server sent nothing)')
+except Exception as e:
+    print('recv error:', e)
+s.close()
+" "$HOST"
+          echo
+          echo "### TEST 2: connect, send a line, read for 12s"
+          python3 -c "import socket,sys
+h=sys.argv[1]
+try:
+    a=socket.gethostbyname(h)
+except Exception:
+    a=h
+s=socket.socket(); s.settimeout(12)
+try:
+    s.connect((a,7835))
+    s.sendall(b'hello\n')
+    print('sent 6 bytes')
+except Exception as e:
+    print('send/connect FAIL:', e); sys.exit(0)
+try:
+    d=s.recv(256)
+    print('recv bytes =', len(d), repr(d[:80]))
+except socket.timeout:
+    print('recv: TIMEOUT (server sent nothing)')
+except Exception as e:
+    print('recv error:', e)
+s.close()
+" "$HOST"
+
+      - name: Run bore with hostname vs IP
+        shell: bash
+        env:
+          HOST: ${{ inputs.host }}
+        run: |
+          set -uo pipefail
+          W="$RUNNER_TEMP/bore"; mkdir -p "$W"
+          ARCH=$(uname -m)
+          case "$ARCH" in x86_64|amd64) A=amd64;; aarch64|arm64) A=arm64;; *) A=amd64;; esac
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            T="${A}-pc-windows-msvc"; EX=zip
+            curl -fsSL -o "$W/b.zip" "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-${T}.zip"
+            unzip -o -q "$W/b.zip" -d "$W"; BIN="$W/bore.exe"
+          else
+            T="${A}-unknown-linux-musl"; EX=tar.gz
+            curl -fsSL -o "$W/b.tgz" "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-${T}.tar.gz"
+            tar -xzf "$W/b.tgz" -C "$W"; BIN="$W/bore"
+          fi
+          chmod +x "$BIN"
+
+          echo "### TEST 3: bore --to HOSTNAME"
+          "$BIN" local 3389 --to "$HOST" >"$W/h.log" 2>&1 &
+          P=$!; sleep 12
+          if kill -0 $P 2>/dev/null; then echo "RESULT hostname: STILL RUNNING (OK)"; kill $P 2>/dev/null; else echo "RESULT hostname: DIED"; fi
+          sed 's/\x1b\[[0-9;]*m//g' "$W/h.log" | head -5
+
+          IP=$(python3 -c "import socket;print(socket.gethostbyname('$HOST'))" 2>/dev/null || echo "")
+          echo
+          echo "### TEST 4: bore --to IP ($IP)"
+          if [ -n "$IP" ]; then
+            "$BIN" local 3389 --to "$IP" >"$W/i.log" 2>&1 &
+            P=$!; sleep 12
+            if kill -0 $P 2>/dev/null; then echo "RESULT ip: STILL RUNNING (OK)"; kill $P 2>/dev/null; else echo "RESULT ip: DIED"; fi
+            sed 's/\x1b\[[0-9;]*m//g' "$W/i.log" | head -5
+          fi

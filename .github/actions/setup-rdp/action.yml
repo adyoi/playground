@@ -70,15 +70,23 @@ runs:
           Windows)
             echo "🪟 Configuring native RDP (TermService)..."
 
-            # TermService may not be running yet; stopping is best-effort only.
-            net stop TermService /y >/dev/null 2>&1 || true
+            # Git Bash (MSYS) rewrites any argument starting with "/" into a Windows
+            # path, which silently breaks reg.exe/net.exe switches (/v, /add, /active).
+            # Turning the conversion off keeps those switches intact.
+            export MSYS_NO_PATHCONV=1
 
-            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f >/dev/null
-            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 1 /f >/dev/null
-            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 1 /f >/dev/null
-            # Allow multiple concurrent sessions (otherwise clients hit error 0x708).
-            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fSingleSessionPerUser /t REG_DWORD /d 0 /f >/dev/null
-            reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v AllowRemoteRPC /t REG_DWORD /d 1 /f >/dev/null
+            # Registry edits go through PowerShell (not reg.exe) because that is the
+            # path already proven to work on windows-latest by the legacy workflows.
+            if ! powershell -NoProfile -Command "
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force;
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1 -Force;
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 1 -Force;
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fSingleSessionPerUser' -Value 0 -Force;
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'AllowRemoteRPC' -Value 1 -Force
+            "; then
+              echo "❌ Gagal menyetel registry RDP" >&2
+              exit 1
+            fi
 
             netsh advfirewall firewall delete rule name="$FIREWALL_RULE" >/dev/null 2>&1 || true
             netsh advfirewall firewall add rule name="$FIREWALL_RULE" dir=in action=allow protocol=TCP localport="$PORT" >/dev/null

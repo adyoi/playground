@@ -127,6 +127,7 @@ jobs:
         if: cancelled() || failure()
         shell: bash
         run: |
+          export MSYS_NO_PATHCONV=1
           echo "🧹 Cleaning up WireGuard..."
           if [ -x "/c/Program Files/WireGuard/wireguard.exe" ]; then
             "/c/Program Files/WireGuard/wireguard.exe" /uninstalltunnels wg0 2>/dev/null || true

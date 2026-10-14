@@ -45,6 +45,10 @@ runs:
           exit 1
         fi
 
+        # wireguard.exe is driven with /switch arguments (e.g. /installtunnels).
+        # Git Bash would rewrite those into Windows paths, so disable the conversion.
+        export MSYS_NO_PATHCONV=1
+
         resolve_wg() {
           for candidate in "/c/Program Files/WireGuard/wireguard.exe" /usr/bin/wg /usr/local/bin/wg; do
             [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }

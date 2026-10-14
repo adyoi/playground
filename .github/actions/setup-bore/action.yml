@@ -81,8 +81,6 @@ runs:
         fi
         chmod +x "$BORE_BIN"
 
-        [ -n "$BORE_SECRET" ] && ARGS+=(--secret "$BORE_SECRET")
-
         # Prefer an explicit IPv4 literal. GitHub Actions runners commonly advertise an
         # AAAA record for public hosts but have no working IPv6 egress, and bore's client
         # then hangs until "timed out waiting for initial message". The reported endpoint
@@ -94,6 +92,10 @@ runs:
         else
           echo "⚠️  Gagal resolve IPv4 untuk ${BORE_SERVER}, pakai hostname apa adanya" >&2
         fi
+
+        ARGS=(local "$TUNNEL_PORT" --to "$BORE_TARGET")
+        [ -n "$BORE_SECRET" ] && ARGS+=(--secret "$BORE_SECRET")
+        echo "📋 bore args: ${ARGS[*]}"
 
         # Pre-flight: prove the control port is reachable and report it clearly.
         # Without this, bore just dies with "timed out waiting for initial message"

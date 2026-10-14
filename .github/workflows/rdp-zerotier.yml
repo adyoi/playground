@@ -30,6 +30,11 @@ on:
           - rdp
           - ssh
         default: 'auto'
+      keepalive_minutes:
+        description: 'How long to keep the session alive (max 340)'
+        required: false
+        type: string
+        default: '340'
 
 permissions:
   contents: read
@@ -93,6 +98,7 @@ jobs:
           USERNAME: ${{ steps.access.outputs.username }}
           PASSWORD: ${{ steps.access.outputs.password }}
           SSH_KEY: ${{ steps.access.outputs.ssh_private_key }}
+          KEEPALIVE_MINUTES: ${{ github.event.inputs.keepalive_minutes }}
         run: |
           echo ""
           echo "🎯 === REMOTE ACCESS INFO (ZEROTIER) === 🎯"
@@ -122,10 +128,19 @@ jobs:
           echo "====================================="
           echo ""
 
-          for i in $(seq 1 340); do
-            echo "🟢 [$(date '+%Y-%m-%d %H:%M:%S')] Remote access active via ZeroTier"
+          # Clamp so a typo (or 0) cannot make the loop exit instantly or blow
+          # past the job timeout.
+          MINUTES="${KEEPALIVE_MINUTES:-340}"
+          case "$MINUTES" in ''|*[!0-9]*) MINUTES=340 ;; esac
+          [ "$MINUTES" -gt 340 ] && MINUTES=340
+          [ "$MINUTES" -lt 1 ] && MINUTES=1
+          echo "⏱️  Holding the session for ${MINUTES} minutes"
+
+          for i in $(seq 1 "$MINUTES"); do
+            echo "🟢 [$(date '+%Y-%m-%d %H:%M:%S')] Remote access active via ZeroTier ($i/${MINUTES})"
             sleep 60
           done
+          echo "⏹️  Keepalive selesai. Menutup sesi."
 
       - name: 🧹 Cleanup on Cancel/Failure
         if: cancelled() || failure()

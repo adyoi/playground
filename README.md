@@ -1,4 +1,8 @@
-# Playground RDP - GitHub Actions Remote Desktop
+# Playground
+[![Playground RDP (ZeroTier)](https://github.com/adyoi/playground/actions/workflows/rdp-zerotier.yml/badge.svg)](https://github.com/adyoi/playground/actions/workflows/rdp-zerotier.yml)
+[![Playground RDP (Cloudflare Tunnel)](https://github.com/adyoi/playground/actions/workflows/rdp-cloudflare.yml/badge.svg)](https://github.com/adyoi/playground/actions/workflows/rdp-cloudflare.yml)
+[![Playground RDP (Ngrok TCP)](https://github.com/adyoi/playground/actions/workflows/rdp-ngrok.yml/badge.svg)](https://github.com/adyoi/playground/actions/workflows/rdp-ngrok.yml)
+[![Playground RDP (Tailscale)](https://github.com/adyoi/playground/actions/workflows/rdp-tailscale.yml/badge.svg)](https://github.com/adyoi/playground/actions/workflows/rdp-tailscale.yml)
 
 Repository ini berisi workflow GitHub Actions untuk memberi akses Remote Desktop (RDP)
 ke runner GitHub Actions menggunakan beberapa metode tunneling berbeda.

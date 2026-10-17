@@ -260,6 +260,26 @@ cloudflared access tcp --hostname rdp.namaku.digitalplat.org --url rdp://localho
 | Secret Name | Value | Deskripsi |
 |-------------|-------|-----------|
 | `ZEROTIER_NETWORK_ID` | Network ID dari langkah 4 | Untuk join network |
+| `ZEROTIER_API_TOKEN` *(opsional)* | API token dari dashboard (lihat di bawah) | Auto-authorize node runner |
+
+#### `ZEROTIER_API_TOKEN` — auto-authorize (disarankan)
+
+Node runner punya **identitas acak baru setiap run**, dan pada network **Private** node itu
+harus di-*Auth* dulu. Dengan token ini workflow meng-*Auth* sendiri, jadi tidak perlu klik
+apa pun:
+
+1. Buka [my.zerotier.com](https://my.zerotier.com/) → menu **Account** → **API Access Tokens**
+2. **New Token** → beri nama → centang **Read & Write** → simpan token-nya
+2. GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+   - Name: `ZEROTIER_API_TOKEN`
+   - Value: token dari langkah 1
+
+> Kalau akun Anda memakai dashboard baru (`central.zerotier.com`), pakai **Service Account
+> token**: workflow otomatis mencoba skema lama (`token` + `api.zerotier.com/v1`) dulu, lalu
+> `Bearer` + `central.zerotier.com/api/v2` kalau skema lama ditolak.
+> Secret ini **opsional**: tanpa isi, network **Private** tetap bisa dipakai, hanya saja
+> authorize-nya manual lewat window 10 menit (Node ID dicetak di log).
+
 
 ### Menjalankan Workflow
 1. Buka tab **Actions** → **"Playground RDP (ZeroTier)"**
@@ -271,14 +291,17 @@ cloudflared access tcp --hostname rdp.namaku.digitalplat.org --url rdp://localho
 5. Copy **Computer** + **Password** dari step **"Display RDP Access Info"**, lalu sambung via `mstsc`
 
 > ⚠️ **Access type = Private:** node runner memakai identitas acak **baru setiap run**, jadi
-> setiap run baru butuh authorize ulang. Buka **my.zerotier.com → Networks → <network Anda>
-> → Members**, centang **Auth** untuk node runner **dan** node PC Anda.
-> Kalau mau praktis (tanpa authorize tiap run), pakai **Public** — dengan konsekuensi siapa pun
-> yang tahu Network ID bisa ikut join.
+> node runner harus di-*Auth* untuk tiap run.
+> - **Dengan `ZEROTIER_API_TOKEN`** (disarankan): otomatis, tanpa klik sama sekali.
+> - **Tanpa token:** buka **my.zerotier.com → Networks → <network Anda> → Members**, cari
+>   **Node ID runner** (dicetak di log), lalu centang **Auth** — sekaligus Auth node PC Anda.
+>
+> Kalau mau lepas semua otorisasi, pakai **Public** — konsekuensinya siapa pun yang tahu
+> Network ID bisa ikut join.
 >
 > 💡 Step **"Establish ZeroTier Connection"** menunggu sampai **10 menit** dan mencetak
-> **Node ID runner** di awal window tunggu, jadi authorize bisa dikerjakan *sambil* step
-> berjalan — begitu di-`Auth`, workflow lanjut sendiri tanpa perlu run ulang.
+> **Node ID runner** di awal window tunggu, jadi authorize manual bisa dikerjakan *sambil*
+> step berjalan — begitu di-`Auth`, workflow lanjut sendiri tanpa perlu run ulang.
 
 ### Koneksi dari Local (Client)
 

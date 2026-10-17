@@ -263,7 +263,12 @@ cloudflared access tcp --hostname rdp.namaku.digitalplat.org --url rdp://localho
    - **os**: pilih `windows-latest` / `ubuntu-latest` / `macos-latest`
    - **protocol**: opsional — `auto` (default), `rdp`, atau `ssh`
 3. Tunggu step **"Install & Join ZeroTier"** selesai
-4. Copy **Computer** dari step "Display RDP Access Info"
+4. Baca **Computer / Username / Password** di:
+   - tab **Summary** run (langsung terlihat, direkomendasikan), atau
+   - log step "Display RDP Access Info"
+
+> 💡 Log step baru bisa diunduh setelah job selesai (keepalive bisa berjam-jam), jadi
+> pakai tab **Summary** — atau buka log live di browser saat run masih jalan.
 
 > ⚠️ **Jika network pakai Access type = Private**, node akan tertahan di status *Pending*.
 > Step "Install & Join ZeroTier" menunggu sampai **10 menit** dan mencetak **Node ID runner**

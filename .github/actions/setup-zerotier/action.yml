@@ -26,13 +26,18 @@ runs:
           exit 1
         fi
 
+        # Since ZeroTier 1.14 the Windows installer only ships the `.bat` wrapper in
+        # Program Files (the real binary lives in ProgramData), so the .bat
+        # candidates must be probed first -- looking only for .exe fails silently.
         resolve_cli() {
           for candidate in \
+            "/c/Program Files (x86)/ZeroTier/One/zerotier-cli.bat" \
+            "/c/Program Files/ZeroTier/One/zerotier-cli.bat" \
             "/c/Program Files (x86)/ZeroTier/One/zerotier-cli.exe" \
             "/c/Program Files/ZeroTier/One/zerotier-cli.exe" \
             "/Library/Application Support/ZeroTier/One/zerotier-cli" \
             "/var/lib/zerotier-one/zerotier-cli"; do
-            [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+            [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
           done
           command -v zerotier-cli 2>/dev/null && return 0
           return 1
@@ -67,46 +72,86 @@ runs:
         ZT="$(resolve_cli)" || {
           echo "❌ Binary zerotier-cli tidak ditemukan setelah install." >&2
           echo "   Cari manual:" >&2
-          echo "   Windows: 'C:\Program Files (x86)\ZeroTier\One\zerotier-cli.exe'" >&2
+          echo "   Windows: 'C:\Program Files (x86)\ZeroTier\One\zerotier-cli.bat'" >&2
           echo "   Linux:   /var/lib/zerotier-one/zerotier-cli" >&2
           exit 1
         }
         echo "📍 zerotier-cli: $ZT"
 
+        # `sudo` does not exist in Git Bash on the Windows runners, and it is not
+        # needed there (the job already runs as Administrator). Linux/macOS do need
+        # it because the zerotier-one service drops privileges.
+        SUDO=""
+        [ "${RUNNER_OS}" != "Windows" ] && SUDO="sudo"
+
         echo "🔗 Joining network ${ZEROTIER_NETWORK_ID}..."
-        sudo "$ZT" join "$ZEROTIER_NETWORK_ID" 2>&1 | tee "$RUNNER_TEMP/zt-join.log" || true
+        $SUDO "$ZT" join "$ZEROTIER_NETWORK_ID" 2>&1 | tee "$RUNNER_TEMP/zt-join.log" || true
 
         dump_state() {
           echo "---- zerotier-cli info ----" >&2
-          sudo "$ZT" info 2>&1 | head -n 30 >&2 || true
+          $SUDO "$ZT" info 2>&1 | head -n 30 >&2 || true
           echo "---- zerotier-cli listnetworks ----" >&2
-          sudo "$ZT" listnetworks 2>&1 | head -n 60 >&2 || true
+          $SUDO "$ZT" listnetworks 2>&1 | head -n 60 >&2 || true
           echo "---------------------------" >&2
         }
 
-        # Tolerant parser (see parse_ip.py): accepts several JSON field spellings,
-        # skips the 999.x placeholder range, and falls back to scraping the
-        # human-readable listnetworks output.
-        get_ip() {
-          sudo "$ZT" -j listnetworks 2>/dev/null \
-            | python3 "$GITHUB_ACTION_PATH/parse_ip.py" "$ZEROTIER_NETWORK_ID" 2>/dev/null \
-            | tr -d '\r\n '
+        # Dependency-free IP parsing (no python/jq needed): read the text form of
+        # `zerotier-cli listnetworks`, keep the line whose network ID matches and
+        # take the first real IPv4/prefix after it. ZeroTier prints 999.x.x.x as a
+        # placeholder while the node is still unauthorized, so that one is skipped.
+        parse_ip() {
+          $SUDO "$ZT" listnetworks 2>/dev/null | tr -d '\r' | while read -r line; do
+            set -- $line
+            [ "${1:-}" = "200" ] || continue
+            [ "${2:-}" = "listnetworks" ] || continue
+            [ "${3:-}" = "$ZEROTIER_NETWORK_ID" ] || continue
+            shift 3
+            for token in "$@"; do
+              case "$token" in
+                */*)
+                  addr="${token%%/*}"
+                  case "$addr" in
+                    999.*|''|*[!0-9.]*) continue ;;
+                  esac
+                  printf '%s' "$addr"
+                  return 0
+                  ;;
+              esac
+            done
+          done
         }
 
+        # Network Private -> node runner harus di-authorize dulu dari dashboard
+        # ZeroTier, jadi ID node dicetak dan window tunggu dibuat lebar (10 menit)
+        # supaya masih ada waktu untuk klik "Auth" sambil step ini berjalan.
+        NODE_ID="$($SUDO "$ZT" info 2>/dev/null | tr -d '\r' | awk 'NR==1 {print $3}')"
+        [ -n "$NODE_ID" ] || NODE_ID='(tidak terbaca)'
+
+        ATTEMPTS=120          # 120 x 5s = 10 menit
+        WAIT_SECONDS=$((ATTEMPTS * 5))
+
+        echo "⏳ Menunggu IP ZeroTier (maks $((WAIT_SECONDS / 60)) menit)..."
+        echo "   Node ID runner : ${NODE_ID}"
+        echo "   Network Private? Authorize node di atas di:"
+        echo "   https://my.zerotier.com -> Networks -> ${ZEROTIER_NETWORK_ID} -> Members -> centang 'Auth'"
+
         ZT_IP=""
-        for _ in $(seq 1 24); do
-          ZT_IP="$(get_ip)"
+        for i in $(seq 1 "$ATTEMPTS"); do
+          ZT_IP="$(parse_ip)"
           [ -n "$ZT_IP" ] && break
+          if [ $((i % 12)) -eq 0 ]; then
+            echo "   ... menunggu $((i * 5))s/${WAIT_SECONDS}s (node ${NODE_ID})"
+          fi
           sleep 5
         done
 
         if [ -z "$ZT_IP" ]; then
           echo "" >&2
           dump_state
-          echo "❌ Node belum dapat IP ZeroTier dalam 2 menit." >&2
-          echo "   Penyebab paling umum: network Access type = Private butuh otorisasi manual." >&2
-          echo "   1. Buka https://my.zerotier.com -> Actions -> Machines" >&2
-          echo "   2. Cari node 'gh-runner-*', klik Authorize" >&2
+          echo "❌ Node belum dapat IP ZeroTier setelah $((WAIT_SECONDS / 60)) menit." >&2
+          echo "   Penyebab paling umum: network Access type = Private, node belum di-authorize." >&2
+          echo "   1. Buka https://my.zerotier.com -> Networks -> ${ZEROTIER_NETWORK_ID} -> Members" >&2
+          echo "   2. Cari node ${NODE_ID}, centang 'Auth'" >&2
           echo "   3. Jalankan ulang workflow ini" >&2
           exit 1
         fi

@@ -3,6 +3,11 @@ name: Playground RDP (ZeroTier)
 on:
   workflow_dispatch:
     inputs:
+      network_id:
+        description: 'ZeroTier Network ID - leave empty to use the ZEROTIER_NETWORK_ID secret'
+        required: false
+        type: string
+        default: ''
       custom_password:
         description: 'Custom RDP password (optional, auto-generated if empty)'
         required: false
@@ -16,6 +21,20 @@ on:
           - ubuntu-latest
           - macos-latest
         default: 'windows-latest'
+      protocol:
+        description: 'Remote access protocol. auto = RDP on Windows/Linux, SSH on macOS'
+        required: false
+        type: choice
+        options:
+          - auto
+          - rdp
+          - ssh
+        default: 'auto'
+      keepalive_minutes:
+        description: 'How long to keep the session alive (max 340)'
+        required: false
+        type: string
+        default: '340'
 
 permissions:
   contents: read
@@ -23,196 +42,131 @@ permissions:
 jobs:
   secure-rdp:
     runs-on: ${{ github.event.inputs.os }}
-    timeout-minutes: 3600
-    defaults:
-      run:
-        shell: pwsh
+    timeout-minutes: 350
+    env:
+      # Resolve the network id once: a manual input wins, otherwise fall back to the
+      # secret. Every step then reads ZT_NETWORK so cleanup leaves the right network.
+      ZT_NETWORK: ${{ github.event.inputs.network_id != '' && github.event.inputs.network_id || secrets.ZEROTIER_NETWORK_ID }}
     steps:
       - name: 📋 Display Configuration Info
+        shell: bash
         run: |
-          Write-Host "🔧 === PLAYGROUND RDP - ZEROTIER === 🔧"
-          Write-Host "📦 Repository: ${{ github.repository }}"
-          Write-Host "🆔 Run ID: ${{ github.run_id }}"
-          Write-Host "👤 Triggered by: ${{ github.actor }}"
-          Write-Host "===================================="
+          echo "🔧 === PLAYGROUND RDP - ZEROTIER === 🔧"
+          echo "📦 Repository: ${{ github.repository }}"
+          echo "🆔 Run ID: ${{ github.run_id }}"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "🖥️  Runner OS: ${RUNNER_OS}"
+          echo "🪐 Network: ${ZT_NETWORK}"
+          echo "=================================="
 
-      - name: ⚙️ Configure Core RDP Settings
-        run: |
-          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
-          netsh advfirewall firewall delete rule name="RDP-ZeroTier" 2>nul
-          netsh advfirewall firewall add rule name="RDP-ZeroTier" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
-          Write-Host "✅ RDP & Firewall configured"
+      - name: 📜 Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: 👤 Create RDP User
-        id: create-user
-        run: |
-          Write-Host "👤 Creating RDP user..."
-          $customPass = "${{ github.event.inputs.custom_password }}"
-          if ($customPass -ne "") {
-            $password = $customPass
-          } else {
-            Add-Type -AssemblyName System.Security
-            $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
-            $rawPassword = @()
-            $rawPassword += $charSet.Upper | Get-Random -Count 4
-            $rawPassword += $charSet.Lower | Get-Random -Count 4
-            $rawPassword += $charSet.Number | Get-Random -Count 4
-            $rawPassword += $charSet.Special | Get-Random -Count 4
-            $password = -join ($rawPassword | Sort-Object { Get-Random })
-          }
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
-            Remove-LocalUser -Name "RDP" -Force
-          }
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
-          if (-not (Get-LocalUser -Name "RDP")) {
-            Write-Error "❌ User creation failed"
-            exit 1
-          }
-          Write-Host "✅ RDP user created with secure password"
+      - name: ⚙️ Setup Remote Access
+        id: access
+        uses: ./.github/actions/setup-rdp
+        with:
+          username: RDP
+          custom_password: ${{ github.event.inputs.custom_password }}
+          firewall_rule: RDP-ZeroTier
+          protocol: ${{ github.event.inputs.protocol }}
 
-      - name: 🌐 Install ZeroTier
-        run: |
-          Write-Host "🌐 Installing ZeroTier..."
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          $ztUrl = "https://download.zerotier.com/dist/ZeroTierOne.msi"
-          $installerPath = "$env:TEMP\ZeroTierOne.msi"
-          Invoke-WebRequest -Uri $ztUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/qn", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-          Write-Host "✅ ZeroTier installed"
+      - name: 🪐 Install & Join ZeroTier
+        id: vpn
+        uses: ./.github/actions/setup-zerotier
+        with:
+          network_id: ${{ env.ZT_NETWORK }}
 
-      - name: 🔗 Establish ZeroTier Connection
+      - name: ✅ Verify Connectivity
+        shell: bash
         env:
-          ZEROTIER_NETWORK_ID: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          PORT: ${{ steps.access.outputs.port }}
         run: |
-          if (-not $env:ZEROTIER_NETWORK_ID) {
-            Write-Error "❌ ZEROTIER_NETWORK_ID tidak ditemukan di GitHub Secrets."
+          echo "🔍 Verifikasi port ${PORT} di runner..."
+          # Portabel: bash /dev/tcp jalan di Git Bash, Linux, dan macOS.
+          # Fallback ke python hanya kalau shell-nya tidak punya /dev/tcp.
+          port_open() {
+            if (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; then
+              return 0
+            fi
+            local py=""
+            command -v python3 >/dev/null 2>&1 && py="python3"
+            [ -z "$py" ] && command -v python >/dev/null 2>&1 && py="python"
+            if [ -n "$py" ]; then
+              "$py" -c "import socket,sys; s=socket.socket(); s.settimeout(5); sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1]))) == 0 else 1)" "$1" && return 0
+            fi
+            return 1
+          }
+          if ! port_open "$PORT"; then
+            echo "❌ Port ${PORT} tidak merespons di runner" >&2
             exit 1
-          }
-
-          # Sejak ZeroTier 1.14 installer Windows hanya memasang wrapper
-          # `zerotier-cli.bat` di Program Files; binary aslinya ada di ProgramData.
-          # Karena itu resolve beberapa kandidat, bukan hanya .exe.
-          $ztCli = @(
-            "C:\Program Files (x86)\ZeroTier\One\zerotier-cli.bat",
-            "C:\Program Files\ZeroTier\One\zerotier-cli.bat",
-            "C:\Program Files (x86)\ZeroTier\One\zerotier-cli.exe",
-            "C:\Program Files\ZeroTier\One\zerotier-cli.exe"
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $ztCli) {
-            Write-Error "❌ zerotier-cli tidak ditemukan setelah install."
-            exit 1
-          }
-          Write-Host "🧭 zerotier-cli: $ztCli"
-
-          $service = Get-Service -Name "ZeroTierOneService" -ErrorAction SilentlyContinue
-          if ($service -and $service.Status -ne 'Running') {
-            Write-Host "🔄 Starting ZeroTier service..."
-            Start-Service -Name "ZeroTierOneService"
-            Start-Sleep -Seconds 5
-          }
-
-          Write-Host "📊 === ZeroTier Status (Before) ==="
-          & $ztCli info 2>&1
-          Write-Host "=================================="
-
-          Write-Host "🔗 Joining network $env:ZEROTIER_NETWORK_ID..."
-          & $ztCli join $env:ZEROTIER_NETWORK_ID 2>&1
-          Write-Host "🔢 Exit code: $LASTEXITCODE"
-
-          $ztIP = $null
-          $retries = 0
-          while (-not $ztIP -and $retries -lt 24) {
-            $nets = $null
-            try {
-              $nets = (& $ztCli -j listnetworks 2>$null | Out-String) | ConvertFrom-Json
-            } catch { $nets = $null }
-            $net = $nets | Where-Object { $_.nwid -eq $env:ZEROTIER_NETWORK_ID } | Select-Object -First 1
-            if ($net) {
-              # 999.x.x.x adalah placeholder ZeroTier sebelum IP asli diberikan.
-              $addr = $net.assignedAddresses |
-                Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+/' -and $_ -notmatch '^999\.' } |
-                Select-Object -First 1
-              if ($addr) { $ztIP = ($addr -split '/')[0] }
-            }
-            if ($ztIP) { break }
-            Start-Sleep -Seconds 5
-            $retries++
-          }
-
-          if (-not $ztIP) {
-            Write-Host "📊 === ZeroTier Status (After) ==="
-            & $ztCli info 2>&1
-            & $ztCli listnetworks 2>&1
-            Write-Host "================================="
-            Write-Error "❌ Node belum dapat IP ZeroTier dalam 2 menit."
-            Write-Host "   Penyebab paling umum: network Access type = Private butuh otorisasi manual."
-            Write-Host "   1. Buka https://my.zerotier.com -> Networks -> <network Anda> -> Machines"
-            Write-Host "   2. Cari node 'gh-runner-*', klik Authorize"
-            Write-Host "   3. Jalankan ulang workflow ini"
-            exit 1
-          }
-          echo "ZEROTIER_IP=$ztIP" >> $env:GITHUB_ENV
-          Write-Host "🌐 ZeroTier IP: $ztIP"
-
-          Write-Host "📊 === ZeroTier Status (After) ==="
-          & $ztCli info 2>&1
-          Write-Host "================================="
-          Write-Host "✅ ZeroTier connected"
-
-      - name: ✅ Verify RDP Connectivity
-        run: |
-          Write-Host "🔍 Verifying RDP connectivity..."
-          Write-Host "🌐 ZeroTier IP: $env:ZEROTIER_IP"
-          $testResult = Test-NetConnection -ComputerName $env:ZEROTIER_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-            Write-Error "❌ TCP connection to RDP port 3389 failed on $env:ZEROTIER_IP"
-            exit 1
-          }
-          Write-Host "✅ TCP connectivity successful!"
+          fi
+          echo "✅ Port ${PORT} aktif"
 
       - name: 📋 Display RDP Access Info
+        shell: bash
+        env:
+          PROTOCOL: ${{ steps.access.outputs.protocol }}
+          PORT: ${{ steps.access.outputs.port }}
+          VPN_IP: ${{ steps.vpn.outputs.ip }}
+          USERNAME: ${{ steps.access.outputs.username }}
+          PASSWORD: ${{ steps.access.outputs.password }}
+          SSH_KEY: ${{ steps.access.outputs.ssh_private_key }}
+          KEEPALIVE_MINUTES: ${{ github.event.inputs.keepalive_minutes }}
         run: |
-          Write-Host "`n🎯 === RDP ACCESS INFO (ZEROTIER) === 🎯"
-          Write-Host "💻 Computer: $env:ZEROTIER_IP"
-          Write-Host "👤 Username: RDP"
-          Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
-          Write-Host "==============================="
-          Write-Host "📱 Cara Menyambung dari Devices Anda:"
-          Write-Host "1️⃣ Install ZeroTier: https://www.zerotier.com/download/"
-          Write-Host "2️⃣ Join Network di app ZeroTier, lalu Authorize device di my.zerotier.com"
-          Write-Host "3️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
-          Write-Host "=====================================`n"
+          echo ""
+          echo "🎯 === REMOTE ACCESS INFO (ZEROTIER) === 🎯"
+          echo "💻 Computer: ${VPN_IP}:${PORT}"
+          if [ "$PROTOCOL" = "ssh" ]; then
+            echo "👤 Username: runner  (user bawaan runner, bukan user RDP)"
+            echo "🔑 Auth: SSH private key"
+            echo ""
+            echo "   Contoh: ssh -i playground_key -p ${PORT} runner@${VPN_IP}"
+            echo ""
+            echo "🔐 PRIVATE KEY - simpan aman, hapus log run setelah dipakai:"
+            echo "${SSH_KEY}"
+          else
+            echo "👤 Username: ${USERNAME}"
+            echo "🔑 Password: ${PASSWORD}"
+          fi
+          echo "================================="
+          echo "📱 Cara Menyambung dari Devices Anda:"
+          echo "1️⃣ Install ZeroTier: https://www.zerotier.com/download/"
+          echo "2️⃣ Join Network di app ZeroTier, lalu Authorize device di my.zerotier.com"
+          if [ "$PROTOCOL" = "ssh" ]; then
+            echo "3️⃣ Buka terminal: ssh -i <file-private-key> -p ${PORT} runner@${VPN_IP}"
+          else
+            echo "3️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
+          fi
+          echo "====================================="
+          echo ""
 
-          $totalMinutes = 355
-          for ($i = 0; $i -lt $totalMinutes; $i++) {
-            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via ZeroTier"
-            Start-Sleep -Seconds 60
-          }
+          # Clamp so a typo (or 0) cannot make the loop exit instantly or blow
+          # past the job timeout.
+          MINUTES="${KEEPALIVE_MINUTES:-340}"
+          case "$MINUTES" in ''|*[!0-9]*) MINUTES=340 ;; esac
+          [ "$MINUTES" -gt 340 ] && MINUTES=340
+          [ "$MINUTES" -lt 1 ] && MINUTES=1
+          echo "⏱️  Holding the session for ${MINUTES} minutes"
+
+          for i in $(seq 1 "$MINUTES"); do
+            echo "🟢 [$(date '+%Y-%m-%d %H:%M:%S')] Remote access active via ZeroTier ($i/${MINUTES})"
+            sleep 60
+          done
+          echo "⏹️  Keepalive selesai. Menutup sesi."
 
       - name: 🧹 Cleanup on Cancel/Failure
         if: cancelled() || failure()
-        env:
-          ZEROTIER_NETWORK_ID: ${{ secrets.ZEROTIER_NETWORK_ID }}
+        shell: bash
         run: |
-          Write-Host "🧹 Cleaning up ZeroTier..."
-          $ztCli = @(
-            "C:\Program Files (x86)\ZeroTier\One\zerotier-cli.bat",
-            "C:\Program Files\ZeroTier\One\zerotier-cli.bat",
-            "C:\Program Files (x86)\ZeroTier\One\zerotier-cli.exe",
-            "C:\Program Files\ZeroTier\One\zerotier-cli.exe"
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if ($ztCli -and $env:ZEROTIER_NETWORK_ID) {
-            try { & $ztCli leave $env:ZEROTIER_NETWORK_ID 2>&1 } catch {}
-          }
-          Write-Host "✅ Cleanup completed"
+          echo "🧹 Cleaning up ZeroTier..."
+          ZT=""
+          for candidate in \
+            "/c/Program Files (x86)/ZeroTier/One/zerotier-cli.exe" \
+            "/c/Program Files/ZeroTier/One/zerotier-cli.exe" \
+            "/Library/Application Support/ZeroTier/One/zerotier-cli" \
+            "/var/lib/zerotier-one/zerotier-cli"; do
+            [ -x "$candidate" ] && { ZT="$candidate"; break; }
+          done
+          [ -n "$ZT" ] && sudo "$ZT" leave "${ZT_NETWORK}" 2>/dev/null || true
+          echo "✅ Cleanup completed"

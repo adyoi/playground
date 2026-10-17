@@ -137,7 +137,7 @@ jobs:
           Write-Host "⏳ Menunggu IP ZeroTier (maks 10 menit)..."
           Write-Host "   Node ID runner : $nodeId"
           Write-Host "   Network Private? Authorize node di atas di:"
-          Write-Host "   https://my.zerotier.com -> Networks -> $env:ZEROTIER_NETWORK_ID -> Members -> centang 'Auth'"
+          Write-Host "   https://central.zerotier.com -> Networks -> $env:ZEROTIER_NETWORK_ID -> Members -> centang 'Auth'"
 
           $ztIP = $null
           $retries = 0
@@ -170,7 +170,7 @@ jobs:
             Write-Host "================================="
             Write-Error "❌ Node belum dapat IP ZeroTier setelah 10 menit."
             Write-Host "   Penyebab paling umum: network Access type = Private, node belum di-authorize."
-            Write-Host "   1. Buka https://my.zerotier.com -> Networks -> $env:ZEROTIER_NETWORK_ID -> Members"
+            Write-Host "   1. Buka https://central.zerotier.com -> Networks -> $env:ZEROTIER_NETWORK_ID -> Members"
             Write-Host "   2. Cari node $nodeId, centang 'Auth'"
             Write-Host "   3. Jalankan ulang workflow ini"
             exit 1
@@ -196,14 +196,14 @@ jobs:
 
       - name: 📋 Display RDP Access Info
         run: |
-          Write-Host "`n🎯 === RDP ACCESS INFO (ZEROTIER) === 🎯"
+          Write-Host "🎯 === RDP ACCESS INFO (ZEROTIER) === 🎯"
           Write-Host "💻 Computer: $env:ZEROTIER_IP"
           Write-Host "👤 Username: RDP"
           Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
           Write-Host "==============================="
           Write-Host "📱 Cara Menyambung dari Devices Anda:"
           Write-Host "1️⃣ Install ZeroTier: https://www.zerotier.com/download/"
-          Write-Host "2️⃣ Join Network di app ZeroTier, lalu Authorize device di my.zerotier.com"
+          Write-Host "2️⃣ Join Network di app ZeroTier, lalu Authorize device di https://central.zerotier.com"
           Write-Host "3️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
           Write-Host "=====================================`n"
 

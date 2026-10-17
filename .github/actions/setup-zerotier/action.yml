@@ -46,13 +46,28 @@ runs:
         case "${RUNNER_OS}" in
           Windows)
             echo "🪟 Installing ZeroTier (Windows)..."
-            MSI="$RUNNER_TEMP/zerotier.msi"
-            # /dist/ is the stable "latest" path; the versioned RELEASES/ path
-            # (ZeroTier_Networks_x64.msi) returns 404 and must not be used.
-            curl -fsSL -o "$MSI" "https://download.zerotier.com/dist/ZeroTierOne.msi" || {
-              echo "❌ Gagal mengunduh installer ZeroTier" >&2; exit 1; }
-            powershell -NoProfile -Command "Start-Process msiexec -ArgumentList '/i','$MSI','/qn','/norestart' -Wait" >/dev/null
-            rm -f "$MSI"
+            # Jangan campur pemisah path ala MSYS ("D:\a\_temp/zerotier.msi"):
+            # curl menulis ke lokasi lain, lalu msiexec gagal seketika dengan
+            # "file not found" -- dan error itu tidak terlihat kalau di-redirect
+            # ke /dev/null. Karena itu download + install dikerjakan penuh oleh
+            # PowerShell (sama seperti versi pwsh yang sudah terbukti jalan), dan
+            # exit code msiexec ikut dicek.
+            MSI_WIN="$(cygpath -w "$RUNNER_TEMP/zerotier.msi" 2>/dev/null || printf '%s' "$RUNNER_TEMP\\zerotier.msi")"
+            PS1="$RUNNER_TEMP/install-zerotier.ps1"
+            cat > "$PS1" << 'PSEOF'
+        param([Parameter(Mandatory = $true)][string]$Msi)
+        $ErrorActionPreference = 'Stop'
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri 'https://download.zerotier.com/dist/ZeroTierOne.msi' -OutFile $Msi
+        Write-Host "📥 MSI tersimpan: $Msi"
+        $proc = Start-Process msiexec.exe -ArgumentList '/i', "`"$Msi`"", '/qn', '/norestart' -Wait -PassThru
+        Write-Host "msiexec exit code: $($proc.ExitCode)"
+        if ($proc.ExitCode -ne 0) { throw "msiexec gagal (exit code $($proc.ExitCode))" }
+        Write-Host '✅ ZeroTier installed'
+        PSEOF
+            powershell -NoProfile -ExecutionPolicy Bypass -File "$PS1" "$MSI_WIN" || {
+              echo "❌ Instalasi ZeroTier (Windows) gagal" >&2; exit 1; }
+            rm -f "$PS1" "$RUNNER_TEMP/zerotier.msi"
             ;;
           Linux|macOS)
             echo "🪐 Installing ZeroTier ($RUNNER_OS)..."
@@ -71,7 +86,11 @@ runs:
 
         ZT="$(resolve_cli)" || {
           echo "❌ Binary zerotier-cli tidak ditemukan setelah install." >&2
-          echo "   Cari manual:" >&2
+          echo "   Isi folder instalasi:" >&2
+          for d in "/c/Program Files (x86)/ZeroTier/One" "/c/Program Files/ZeroTier/One"; do
+            echo "   --- $d ---" >&2
+            ls -1 "$d" 2>&1 | head -n 20 >&2 || true
+          done
           echo "   Windows: 'C:\Program Files (x86)\ZeroTier\One\zerotier-cli.bat'" >&2
           echo "   Linux:   /var/lib/zerotier-one/zerotier-cli" >&2
           exit 1

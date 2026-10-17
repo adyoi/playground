@@ -94,7 +94,6 @@ jobs:
       - name: 🔗 Establish ZeroTier Connection
         env:
           ZEROTIER_NETWORK_ID: ${{ secrets.ZEROTIER_NETWORK_ID }}
-          ZEROTIER_API_TOKEN: ${{ secrets.ZEROTIER_API_TOKEN }}
         run: |
           if (-not $env:ZEROTIER_NETWORK_ID) {
             Write-Error "❌ ZEROTIER_NETWORK_ID tidak ditemukan di GitHub Secrets."
@@ -131,61 +130,14 @@ jobs:
           & $ztCli join $env:ZEROTIER_NETWORK_ID 2>&1
           Write-Host "🔢 Exit code: $LASTEXITCODE"
 
+          # Network Private butuh otorisasi manual, jadi Node ID dicetak di awal dan
+          # window tunggu dibuat lebar (10 menit) supaya masih ada waktu untuk klik
+          # "Auth" di dashboard sambil step ini berjalan.
           $nodeId = (& $ztCli info 2>&1 | Select-Object -First 1) -split '\s+' | Select-Object -Index 2
-
-          # Auto-authorize lewat ZeroTier Central API (opsional).
-          # Member ID = Node ID. Kalau secret ZEROTIER_API_TOKEN diisi, node runner
-          # langsung di-Auth, jadi network Private pun tidak perlu klik manual.
-          if ($env:ZEROTIER_API_TOKEN) {
-            Write-Host "🔑 ZEROTIER_API_TOKEN terdeteksi -> auto-authorize node $nodeId..."
-            $schemes = @(
-              @{ Label = "legacy (my.zerotier.com)"; Url = "https://api.zerotier.com/api/v1/network/$env:ZEROTIER_NETWORK_ID/member/$nodeId"; Headers = @{ Authorization = "token $env:ZEROTIER_API_TOKEN" } },
-              @{ Label = "new central";              Url = "https://central.zerotier.com/api/v2/network/$env:ZEROTIER_NETWORK_ID/member/$nodeId"; Headers = @{ Authorization = "Bearer $env:ZEROTIER_API_TOKEN" } }
-            )
-            $authorized = $false
-            $skipScheme = @{}
-            $lastError = "(belum ada respon)"
-            for ($i = 0; $i -lt 24 -and -not $authorized; $i++) {
-              foreach ($scheme in $schemes) {
-                if ($skipScheme[$scheme.Label]) { continue }
-                try {
-                  # Member baru muncul di Central beberapa saat setelah join,
-                  # jadi POST diulang sampai berhasil.
-                  $member = Invoke-RestMethod -Method Post -Uri $scheme.Url -Headers $scheme.Headers `
-                    -ContentType 'application/json' -Body '{"config":{"authorized":true}}'
-                  if ($member.config.authorized -or $member.authorized) {
-                    $authorized = $true
-                    Write-Host "✅ Node $nodeId authorized via $($scheme.Label)"
-                    break
-                  }
-                } catch {
-                  $status = 0
-                  if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-                  if ($status -eq 401 -or $status -eq 403) {
-                    Write-Host "   ⚠️ $($scheme.Label): token ditolak (HTTP $status), coba skema lain..."
-                    $skipScheme[$scheme.Label] = $true
-                  }
-                  $lastError = "$($scheme.Label): HTTP $status"
-                }
-              }
-              if ($skipScheme.Count -eq $schemes.Count) { break }
-              if (-not $authorized) { Start-Sleep -Seconds 5 }
-            }
-            if (-not $authorized) {
-              Write-Warning "⚠️ Auto-authorize gagal ($lastError) -> authorize manual di dashboard."
-            }
-          } else {
-            Write-Host "ℹ️ ZEROTIER_API_TOKEN tidak diset -> tanpa auto-authorize."
-          }
-
-          # Kalau network Private dan tanpa token, Node ID dicetak di awal window
-          # tunggu (10 menit) supaya masih ada waktu klik "Auth" di dashboard.
           Write-Host "⏳ Menunggu IP ZeroTier (maks 10 menit)..."
           Write-Host "   Node ID runner : $nodeId"
-          if (-not $env:ZEROTIER_API_TOKEN) {
-            Write-Host "   Network Private? Authorize node di atas di:"
-            Write-Host "   https://my.zerotier.com -> Networks -> $env:ZEROTIER_NETWORK_ID -> Members -> centang 'Auth'"
-          }
+          Write-Host "   Network Private? Authorize node di atas di:"
+          Write-Host "   https://my.zerotier.com -> Networks -> $env:ZEROTIER_NETWORK_ID -> Members -> centang 'Auth'"
 
           $ztIP = $null
           $retries = 0
@@ -221,7 +173,6 @@ jobs:
             Write-Host "   1. Buka https://my.zerotier.com -> Networks -> $env:ZEROTIER_NETWORK_ID -> Members"
             Write-Host "   2. Cari node $nodeId, centang 'Auth'"
             Write-Host "   3. Jalankan ulang workflow ini"
-            Write-Host "   Tips: isi secret ZEROTIER_API_TOKEN supaya langkah ini otomatis."
             exit 1
           }
           echo "ZEROTIER_IP=$ztIP" >> $env:GITHUB_ENV

@@ -141,6 +141,34 @@ jobs:
           echo "====================================="
           echo ""
 
+          # Info yang sama juga ditulis ke run summary, supaya bisa dibaca
+          # langsung dari tab Summary tanpa menunggu log job selesai (log baru
+          # bisa diunduh setelah keepalive selesai / run dibatalkan).
+          {
+            echo "## 🎯 Remote Access Info (ZeroTier)"
+            echo ""
+            echo "| Item | Nilai |"
+            echo "| --- | --- |"
+            echo "| 💻 Computer | \`${VPN_IP}:${PORT}\` |"
+            if [ "$PROTOCOL" = "ssh" ]; then
+              echo "| 👤 Username | \`runner\` (user bawaan runner) |"
+              echo "| 🔑 Auth | SSH private key — ada di log step \"Display RDP Access Info\" |"
+            else
+              echo "| 👤 Username | \`${USERNAME}\` |"
+              echo "| 🔑 Password | \`${PASSWORD}\` |"
+            fi
+            echo ""
+            echo "**📱 Cara Menyambung**"
+            echo ""
+            echo "1️⃣ Install ZeroTier: https://www.zerotier.com/download/"
+            echo "2️⃣ Join Network di app ZeroTier, lalu Authorize device di my.zerotier.com"
+            if [ "$PROTOCOL" = "ssh" ]; then
+              echo "3️⃣ Buka terminal: \`ssh -i <file-private-key> -p ${PORT} runner@${VPN_IP}\`"
+            else
+              echo "3️⃣ Buka Remote Desktop Connection (mstsc), masukan info di atas"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
           # Clamp so a typo (or 0) cannot make the loop exit instantly or blow
           # past the job timeout.
           MINUTES="${KEEPALIVE_MINUTES:-340}"
@@ -160,13 +188,24 @@ jobs:
         shell: bash
         run: |
           echo "🧹 Cleaning up ZeroTier..."
+          # Sama seperti action setup-zerotier: sejak ZeroTier 1.14 installer
+          # Windows hanya memasang wrapper .bat, dan `sudo` tidak ada di Git Bash.
           ZT=""
           for candidate in \
+            "/c/Program Files (x86)/ZeroTier/One/zerotier-cli.bat" \
+            "/c/Program Files/ZeroTier/One/zerotier-cli.bat" \
             "/c/Program Files (x86)/ZeroTier/One/zerotier-cli.exe" \
             "/c/Program Files/ZeroTier/One/zerotier-cli.exe" \
             "/Library/Application Support/ZeroTier/One/zerotier-cli" \
             "/var/lib/zerotier-one/zerotier-cli"; do
-            [ -x "$candidate" ] && { ZT="$candidate"; break; }
+            [ -f "$candidate" ] && { ZT="$candidate"; break; }
           done
-          [ -n "$ZT" ] && sudo "$ZT" leave "${ZT_NETWORK}" 2>/dev/null || true
+          SUDO=""
+          [ "${RUNNER_OS}" != "Windows" ] && SUDO="sudo"
+          if [ -n "$ZT" ]; then
+            echo "🚪 Leave network ${ZT_NETWORK} via ${ZT}"
+            $SUDO "$ZT" leave "${ZT_NETWORK}" 2>&1 || true
+          else
+            echo "⚠️  zerotier-cli tidak ditemukan, node dibiarkan (runner selanjutnya dihapus otomatis)"
+          fi
           echo "✅ Cleanup completed"

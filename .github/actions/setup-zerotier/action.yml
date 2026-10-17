@@ -54,16 +54,21 @@ runs:
             # exit code msiexec ikut dicek.
             MSI_WIN="$(cygpath -w "$RUNNER_TEMP/zerotier.msi" 2>/dev/null || printf '%s' "$RUNNER_TEMP\\zerotier.msi")"
             PS1="$RUNNER_TEMP/install-zerotier.ps1"
-            cat > "$PS1" << 'PSEOF'
+            # PowerShell 5.1 membaca file .ps1 tanpa BOM sebagai ANSI, dan byte
+            # emoji UTF-8 bisa jatuh ke 0x93/0x94 yang oleh PowerShell dianggap
+            # "smart quote" pembuka/penutup string -> parse error. Jadi tulis BOM
+            # UTF-8 dan jaga isi script tetap ASCII.
+            printf '\xEF\xBB\xBF' > "$PS1"
+            cat >> "$PS1" << 'PSEOF'
         param([Parameter(Mandatory = $true)][string]$Msi)
         $ErrorActionPreference = 'Stop'
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri 'https://download.zerotier.com/dist/ZeroTierOne.msi' -OutFile $Msi
-        Write-Host "📥 MSI tersimpan: $Msi"
+        Write-Host "MSI saved: $Msi"
         $proc = Start-Process msiexec.exe -ArgumentList '/i', "`"$Msi`"", '/qn', '/norestart' -Wait -PassThru
         Write-Host "msiexec exit code: $($proc.ExitCode)"
-        if ($proc.ExitCode -ne 0) { throw "msiexec gagal (exit code $($proc.ExitCode))" }
-        Write-Host '✅ ZeroTier installed'
+        if ($proc.ExitCode -ne 0) { throw "msiexec failed (exit code $($proc.ExitCode))" }
+        Write-Host 'ZeroTier installed'
         PSEOF
             powershell -NoProfile -ExecutionPolicy Bypass -File "$PS1" "$MSI_WIN" || {
               echo "❌ Instalasi ZeroTier (Windows) gagal" >&2; exit 1; }

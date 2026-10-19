@@ -143,19 +143,20 @@ remote_port = $remotePort
 "@ | Set-Content -Path $frpcIni -Encoding UTF8
 
           Write-Host "🔗 Connecting frpc to $($env:FRP_SERVER_ADDR):$serverPort (remote port $remotePort)..."
-          $frpcLog = "$env:TEMP\frpc.log"
-          Start-Process -FilePath $env:FRPC_PATH -ArgumentList "-c", $frpcIni -RedirectStandardOutput $frpcLog -RedirectStandardError $frpcLog -WindowStyle Hidden -PassThru | Out-Null
+          $frpcLogOut = "$env:TEMP\frpc.out"
+          $frpcLogErr = "$env:TEMP\frpc.err"
+          Start-Process -FilePath $env:FRPC_PATH -ArgumentList "-c", $frpcIni -RedirectStandardOutput $frpcLogOut -RedirectStandardError $frpcLogErr -WindowStyle Hidden -PassThru | Out-Null
           Start-Sleep -Seconds 8
 
           $ok = $false
           for ($i = 0; $i -lt 12; $i++) {
-            $log = Get-Content $frpcLog -Raw -ErrorAction SilentlyContinue
+            $log = ((Get-Content $frpcLogOut -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $frpcLogErr -Raw -ErrorAction SilentlyContinue))
             if ($log -match 'start proxy success|login to server success') { $ok = $true; break }
             if ($log -match 'login to the server failed|connection refused|authorization failed') { break }
             Start-Sleep -Seconds 5
           }
           Write-Host "📄 frpc log (latest 15 lines):"
-          if (Test-Path $frpcLog) { Get-Content $frpcLog -Tail 15 | ForEach-Object { Write-Host "   $_" } }
+          foreach ($f in @($frpcLogOut, $frpcLogErr)) { if (Test-Path $f) { Get-Content $f -Tail 15 | ForEach-Object { Write-Host "   $_" } } }
           if (-not $ok) {
             Write-Error "❌ frpc did not report a successful proxy. Check frps is running and token matches."
             exit 1

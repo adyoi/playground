@@ -96,17 +96,18 @@ jobs:
           PINGGY_TYPE: tcp
         run: |
           $pinggyCmd = 'ssh -p 443 -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N -R 0:127.0.0.1:3389 tcp@free.pinggy.io'
-          $tunnelLog = "$env:TEMP\pinggy-tunnel.log"
+          $tunnelLogOut = "$env:TEMP\pinggy-tunnel.out"
+          $tunnelLogErr = "$env:TEMP\pinggy-tunnel.err"
           Write-Host "🚀 Starting Pinggy TCP tunnel (free tier: 60-min session, random port)..."
           Write-Host "   Command: ssh -p 443 -R 0:127.0.0.1:3389 tcp@free.pinggy.io"
-          Start-Process -FilePath "C:\Windows\System32\OpenSSH\ssh.exe" -ArgumentList "-p","443","-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ExitOnForwardFailure=yes","-o","ServerAliveInterval=30","-o","ServerAliveCountMax=3","-N","-R","0:127.0.0.1:3389","tcp@free.pinggy.io" -RedirectStandardOutput $tunnelLog -RedirectStandardError $tunnelLog -WindowStyle Hidden -PassThru
+          Start-Process -FilePath "C:\Windows\System32\OpenSSH\ssh.exe" -ArgumentList "-p","443","-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ExitOnForwardFailure=yes","-o","ServerAliveInterval=30","-o","ServerAliveCountMax=3","-N","-R","0:127.0.0.1:3389","tcp@free.pinggy.io" -RedirectStandardOutput $tunnelLogOut -RedirectStandardError $tunnelLogErr -WindowStyle Hidden -PassThru | Out-Null
           Start-Sleep -Seconds 8
 
           $hostPort = $null
           for ($i = 0; $i -lt 12; $i++) {
-            $line = (Get-Content $tunnelLog -Raw -ErrorAction SilentlyContinue) | Out-String
+            $line = ((Get-Content $tunnelLogOut -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $tunnelLogErr -Raw -ErrorAction SilentlyContinue)) | Out-String
             # Pinggy TCP output format: tcp://host.pinggy.link:12345
-            $match = [regex]::Match($line, 'tcp://([^.]+\.(?:free\.pinggy\.link|pinggy\.io|pinggy\.online|a\.free\.pinggy\.online|a\.pinggy\.link)):(\d+)')
+            $match = [regex]::Match($line, 'tcp://([A-Za-z0-9._-]+):(\d+)')
             if ($match.Success) {
               $hostPort = @{ Host = $match.Groups[1].Value; Port = [int]$match.Groups[2].Value }
               Write-Host "✅ Tunnel established: tcp://$($hostPort.Host):$($hostPort.Port)"
@@ -116,11 +117,11 @@ jobs:
           }
           if (-not $hostPort) {
             Write-Host "📄 Tunnel log (latest 20 lines):"
-            if (Test-Path $tunnelLog) {
-              Get-Content $tunnelLog -Tail 20 | ForEach-Object { Write-Host "   $_" }
+            foreach ($f in @($tunnelLogOut, $tunnelLogErr)) {
+              if (Test-Path $f) { Get-Content $f -Tail 20 | ForEach-Object { Write-Host "   $_" } }
             }
             # Fallback: try extracting any tcp:// URL from log
-            $raw = Get-Content $tunnelLog -Raw -ErrorAction SilentlyContinue
+            $raw = ((Get-Content $tunnelLogOut -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $tunnelLogErr -Raw -ErrorAction SilentlyContinue))
             $fallback = [regex]::Matches($raw, '(tcp://[a-zA-Z0-9_.-]+:[0-9]+)')
             if ($fallback.Count -gt 0) {
               $url = $fallback[$fallback.Count - 1].Value
@@ -187,9 +188,9 @@ jobs:
         if: cancelled() || failure()
         run: |
           Write-Host "🧹 Cleaning up Pinggy tunnel process..."
-          $proc = Get-Process -Name ssh -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'tcp@free\.pinggy\.io' }
+          $proc = Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'pinggy' }
           if ($proc) {
-            try { $proc | Stop-Process -Force -ErrorAction Stop } catch {}
-            Write-Host "✅ Pinggy tunnel process stopped (PID: $($proc.Id))"
+            foreach ($p in $proc) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }
+            Write-Host "✅ Pinggy tunnel process stopped (PID: $($proc.ProcessId -join ', '))"
           }
           Write-Host "✅ Cleanup completed"

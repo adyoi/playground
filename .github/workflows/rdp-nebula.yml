@@ -132,9 +132,8 @@ jobs:
           # Sederhana: pakai 10.42.0.200/24 sebagai IP tetap runner (tidak acak agar mudah)
           $hostIp = "10.42.0.200/24"
           Write-Host "🔐 Minting host certificate: $runName (IP $hostIp)..."
-          $certArgs = "ca","-ca-crt",$caCrtPath,"-ca-key",$caKeyPath,"-name",$runName,"-ip",$hostIp,"-groups","playground","-out-crt",$hostCrt,"-out-key",$hostKey
-          # nebula-cert subcommand: "nebula-cert ca ..."
-          $fullArgs = @("ca","-ca-crt",$caCrtPath,"-ca-key",$caKeyPath,"-name",$runName,"-ip",$hostIp,"-groups","playground","-out-crt",$hostCrt,"-out-key",$hostKey)
+          # nebula-cert sign: menandatangani host cert dengan CA
+          $fullArgs = @("sign","-ca-crt",$caCrtPath,"-ca-key",$caKeyPath,"-name",$runName,"-ip",$hostIp,"-groups","playground","-out-crt",$hostCrt,"-out-key",$hostKey)
           # Panggil langsung binary cert
           & $env:NEBULA_CERT_BIN $fullArgs 2>&1
           if (-not (Test-Path $hostCrt) -or -not (Test-Path $hostKey)) {
@@ -165,7 +164,7 @@ lighthouse:
   am_lighthouse: false
   interval: 60
   hosts:
-  - '127.0.0.1'
+  - '$lhHost:$lhPort'
 
 listen:
   host: 0.0.0.0
@@ -190,7 +189,6 @@ firewall:
     proto: any
     host: any
   inbound:
-    # Izinkan RDP dari semua peer mesh
   - port: 3389
     proto: tcp
     host: any
@@ -214,15 +212,16 @@ firewall:
           }
           Write-Host "🔗 Memulai Nebula dengan config: $confPath"
           $nebulaBin = $env:NEBULA_BIN
-          $logPath = "$env:TEMP\nebula-run.log"
-          Start-Process -FilePath $nebulaBin -ArgumentList "-config", $confPath -RedirectStandardOutput $logPath -RedirectStandardError $logPath -WindowStyle Hidden -PassThru | Out-Null
+          $logOut = "$env:TEMP\nebula-run.out"
+          $logErr = "$env:TEMP\nebula-run.err"
+          Start-Process -FilePath $nebulaBin -ArgumentList "-config", $confPath -RedirectStandardOutput $logOut -RedirectStandardError $logErr -WindowStyle Hidden -PassThru | Out-Null
           # Tunggu interface dan peer
           $hostIp = $env:NEBULA_HOST_IP
           $tunnelUp = $false
           for ($i = 0; $i -lt 24; $i++) {
             $ifaceInfo = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -match 'nebula' -or $_.IPAddress -like '10.42.0.*' }
             # Cek log
-            $logContent = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+            $logContent = ((Get-Content $logOut -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $logErr -Raw -ErrorAction SilentlyContinue))
             if ($logContent -match 'handshake completed' -or $logContent -match 'tunnel up') {
               Write-Host "✅ Nebula tunnel handshake / tunnel up terdeteksi."
               $tunnelUp = $true
@@ -236,7 +235,7 @@ firewall:
             Write-Host "   Tunnel mungkin tetap berfungsi; coba sambungkan dari PC Anda."
           }
           Write-Host "📋 Log Nebula (10 baris terakhir):"
-          if (Test-Path $logPath) { Get-Content $logPath -Tail 10 | ForEach-Object { Write-Host "   $_" } }
+          foreach ($f in @($logOut, $logErr)) { if (Test-Path $f) { Get-Content $f -Tail 10 | ForEach-Object { Write-Host "   $_" } } }
           # Coba ambil IP tunnel dari interface
           $iface = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '10.42.0.*' }
           if ($iface) {

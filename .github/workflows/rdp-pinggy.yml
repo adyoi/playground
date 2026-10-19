@@ -1,0 +1,195 @@
+name: Playground RDP (Pinggy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 📋 Display Configuration Info
+        run: |
+          Write-Host "🔧 === PLAYGROUND RDP - PINGGY === 🔧"
+          Write-Host "📦 Repository: ${{ github.repository }}"
+          Write-Host "🆔 Run ID: ${{ github.run_id }}"
+          Write-Host "👤 Triggered by: ${{ github.actor }}"
+          Write-Host "===================================="
+
+      - name: ⚙️ Configure Core RDP Settings
+        run: |
+          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
+          netsh advfirewall firewall delete rule name="RDP-Pinggy" 2>nul
+          netsh advfirewall firewall add rule name="RDP-Pinggy" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP & Firewall configured"
+
+      - name: 👤 Create RDP User
+        id: create-user
+        run: |
+          Write-Host "👤 Creating RDP user..."
+          $customPass = "${{ github.event.inputs.custom_password }}"
+          if ($customPass -ne "") {
+            $password = $customPass
+          } else {
+            Add-Type -AssemblyName System.Security
+            $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+            $rawPassword = @()
+            $rawPassword += $charSet.Upper | Get-Random -Count 4
+            $rawPassword += $charSet.Lower | Get-Random -Count 4
+            $rawPassword += $charSet.Number | Get-Random -Count 4
+            $rawPassword += $charSet.Special | Get-Random -Count 4
+            $password = -join ($rawPassword | Sort-Object { Get-Random })
+          }
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "RDP" -Force
+          }
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            Write-Error "❌ User creation failed"
+            exit 1
+          }
+          Write-Host "✅ RDP user created with secure password"
+
+      - name: 🔌 Install OpenSSH Client
+        run: |
+          Write-Host "🔌 Checking OpenSSH client..."
+          $sshPath = (Get-Command ssh -ErrorAction SilentlyContinue).Source
+          if ($sshPath) {
+            Write-Host "✅ SSH client found: $sshPath"
+          } else {
+            Write-Host "🔌 Installing OpenSSH Client (optional feature)..."
+            Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 -ErrorAction SilentlyContinue
+          }
+
+      - name: 🔗 Establish Pinggy TCP Tunnel
+        env:
+          PINGGY_TYPE: tcp
+        run: |
+          $pinggyCmd = 'ssh -p 443 -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N -R 0:127.0.0.1:3389 tcp@free.pinggy.io'
+          $tunnelLog = "$env:TEMP\pinggy-tunnel.log"
+          Write-Host "🚀 Starting Pinggy TCP tunnel (free tier: 60-min session, random port)..."
+          Write-Host "   Command: ssh -p 443 -R 0:127.0.0.1:3389 tcp@free.pinggy.io"
+          Start-Process -FilePath "C:\Windows\System32\OpenSSH\ssh.exe" -ArgumentList "-p","443","-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=NUL","-o","ExitOnForwardFailure=yes","-o","ServerAliveInterval=30","-o","ServerAliveCountMax=3","-N","-R","0:127.0.0.1:3389","tcp@free.pinggy.io" -RedirectStandardOutput $tunnelLog -RedirectStandardError $tunnelLog -WindowStyle Hidden -PassThru
+          Start-Sleep -Seconds 8
+
+          $hostPort = $null
+          for ($i = 0; $i -lt 12; $i++) {
+            $line = (Get-Content $tunnelLog -Raw -ErrorAction SilentlyContinue) | Out-String
+            # Pinggy TCP output format: tcp://host.pinggy.link:12345
+            $match = [regex]::Match($line, 'tcp://([^.]+\.(?:free\.pinggy\.link|pinggy\.io|pinggy\.online|a\.free\.pinggy\.online|a\.pinggy\.link)):(\d+)')
+            if ($match.Success) {
+              $hostPort = @{ Host = $match.Groups[1].Value; Port = [int]$match.Groups[2].Value }
+              Write-Host "✅ Tunnel established: tcp://$($hostPort.Host):$($hostPort.Port)"
+              break
+            }
+            Start-Sleep -Seconds 5
+          }
+          if (-not $hostPort) {
+            Write-Host "📄 Tunnel log (latest 20 lines):"
+            if (Test-Path $tunnelLog) {
+              Get-Content $tunnelLog -Tail 20 | ForEach-Object { Write-Host "   $_" }
+            }
+            # Fallback: try extracting any tcp:// URL from log
+            $raw = Get-Content $tunnelLog -Raw -ErrorAction SilentlyContinue
+            $fallback = [regex]::Matches($raw, '(tcp://[a-zA-Z0-9_.-]+:[0-9]+)')
+            if ($fallback.Count -gt 0) {
+              $url = $fallback[$fallback.Count - 1].Value
+              Write-Host "⚠️ Tunnel URL detected (unverified): $url"
+              Write-Host "   If the above doesn't connect, check https://pinggy.io docs. Free tier may need token for persistent tunnel."
+            }
+          } else {
+            echo "PINGGY_HOST=$($hostPort.Host)" >> $env:GITHUB_ENV
+            echo "PINGGY_PORT=$($hostPort.Port)" >> $env:GITHUB_ENV
+            echo "PINGGY_ENDPOINT=tcp://$($hostPort.Host):$($hostPort.Port)" >> $env:GITHUB_ENV
+          }
+
+      - name: ✅ Verify RDP Connectivity
+        run: |
+          Write-Host "🔍 Verifying RDP connectivity via tunnel..."
+          if ($env:PINGGY_HOST -and $env:PINGGY_PORT) {
+            Write-Host "🌐 Testing TCP to Pinggy endpoint $env:PINGGY_HOST`: $env:PINGGY_PORT ..."
+            $testResult = Test-NetConnection -ComputerName $env:PINGGY_HOST -Port $env:PINGGY_PORT -WarningAction SilentlyContinue
+            if (-not $testResult.TcpTestSucceeded) {
+              Write-Host "⚠️ TCP test to public endpoint failed (expected for some free-tier ports / firewall)."
+              Write-Host "   Tunnel may still work; try mstsc to $env:PINGGY_HOST:$env:PINGGY_PORT."
+            } else {
+              Write-Host "✅ TCP connectivity to tunnel endpoint successful!"
+            }
+          } else {
+            Write-Host "⚠️ Tunnel endpoint not captured — verify manually from tunnel log."
+          }
+          # Always verify local RDP port is open (primary check)
+          $localTest = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389 -WarningAction SilentlyContinue
+          if ($localTest.TcpTestSucceeded) {
+            Write-Host "✅ Local RDP port 3389 is listening."
+          } else {
+            Write-Error "❌ Local RDP port 3389 is NOT listening."
+            exit 1
+          }
+
+      - name: 📋 Display RDP Access Info
+        run: |
+          $tunnelEndpoint = $env:PINGGY_ENDPOINT
+          if (-not $tunnelEndpoint) {
+            $tunnelEndpoint = "Lihat log / step summary (URL belum terdeteksi)"
+          }
+          Write-Host "`n🎯 === RDP ACCESS INFO (PINGGY) === 🎯"
+          Write-Host "💻 Endpoint: $tunnelEndpoint"
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "==============================="
+          Write-Host "📱 Cara Menyambung:"
+          Write-Host "1️⃣ Open Remote Desktop Connection (mstsc)"
+          Write-Host "2️⃣ Masukkan endpoint: $tunnelEndpoint"
+          Write-Host "3️⃣ Masukkan user: RDP | pass: $(${{ steps.create-user.outputs.RDP_PASSWORD }})"
+          Write-Host "4️⃣ Connect via tunnel publik (TCP langsung)"
+          Write-Host "=====================================`n"
+          Write-Host "💡 Catatan: free tier Pinggy = session 60 menit, URL bisa berubah saat reconnect."
+          Write-Host "   Kalau tunnel mati, cancel workflow ini dan jalankan ulang."
+
+          $totalMinutes = 340
+          for ($i = 0; $i -lt $totalMinutes; $i++) {
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Pinggy"
+            Start-Sleep -Seconds 60
+          }
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        run: |
+          Write-Host "🧹 Cleaning up Pinggy tunnel process..."
+          $proc = Get-Process -Name ssh -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'tcp@free\.pinggy\.io' }
+          if ($proc) {
+            try { $proc | Stop-Process -Force -ErrorAction Stop } catch {}
+            Write-Host "✅ Pinggy tunnel process stopped (PID: $($proc.Id))"
+          }
+          Write-Host "✅ Cleanup completed"

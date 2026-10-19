@@ -1,0 +1,218 @@
+name: Playground RDP (FRP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
+      frp_server_addr:
+        description: 'FRP server address (host or IP of your frps)'
+        required: true
+        type: string
+      frp_remote_port:
+        description: 'Public port on frps that forwards to RDP (e.g. 13389)'
+        required: false
+        type: string
+        default: '13389'
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 📋 Display Configuration Info
+        run: |
+          Write-Host "🔧 === PLAYGROUND RDP - FRP === 🔧"
+          Write-Host "📦 Repository: ${{ github.repository }}"
+          Write-Host "🆔 Run ID: ${{ github.run_id }}"
+          Write-Host "👤 Triggered by: ${{ github.actor }}"
+          Write-Host "🖥️ FRP server: ${{ github.event.inputs.frp_server_addr }}"
+          Write-Host "===================================="
+
+      - name: ⚙️ Configure Core RDP Settings
+        run: |
+          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
+          netsh advfirewall firewall delete rule name="RDP-FRP" 2>nul
+          netsh advfirewall firewall add rule name="RDP-FRP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP & Firewall configured"
+
+      - name: 👤 Create RDP User
+        id: create-user
+        run: |
+          Write-Host "👤 Creating RDP user..."
+          $customPass = "${{ github.event.inputs.custom_password }}"
+          if ($customPass -ne "") {
+            $password = $customPass
+          } else {
+            Add-Type -AssemblyName System.Security
+            $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+            $rawPassword = @()
+            $rawPassword += $charSet.Upper | Get-Random -Count 4
+            $rawPassword += $charSet.Lower | Get-Random -Count 4
+            $rawPassword += $charSet.Number | Get-Random -Count 4
+            $rawPassword += $charSet.Special | Get-Random -Count 4
+            $password = -join ($rawPassword | Sort-Object { Get-Random })
+          }
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "RDP" -Force
+          }
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            Write-Error "❌ User creation failed"
+            exit 1
+          }
+          Write-Host "✅ RDP user created with secure password"
+
+      - name: 🔌 Install FRP Client
+        run: |
+          Write-Host "🔌 Installing frp client (v0.71.1)..."
+          $frpVersion = "0.71.1"
+          $url = "https://github.com/fatedier/frp/releases/download/v$frpVersion/frp_${frpVersion}_windows_amd64.zip"
+          $zipPath = "$env:TEMP\frp.zip"
+          $extractDir = "$env:TEMP\frp"
+          Invoke-WebRequest -Uri $url -OutFile $zipPath
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+          $frpc = Get-ChildItem -Path $extractDir -Filter "frpc.exe" -Recurse | Select-Object -First 1
+          if (-not $frpc) {
+            Write-Error "❌ frpc.exe not found after extraction."
+            exit 1
+          }
+          Write-Host "✅ frpc found: $($frpc.FullName)"
+          echo "FRPC_PATH=$($frpc.FullName)" >> $env:GITHUB_ENV
+
+      - name: 🔗 Establish FRP Tunnel
+        env:
+          FRP_SERVER_ADDR: ${{ github.event.inputs.frp_server_addr }}
+          FRP_REMOTE_PORT: ${{ github.event.inputs.frp_remote_port }}
+          FRP_SERVER_PORT: ${{ vars.FRP_SERVER_PORT || '7000' }}
+          FRP_AUTH_TOKEN: ${{ secrets.FRP_AUTH_TOKEN }}
+        run: |
+          if (-not $env:FRP_SERVER_ADDR) {
+            Write-Error "❌ frp_server_addr is required."
+            exit 1
+          }
+          if (-not $env:FRP_AUTH_TOKEN) {
+            Write-Error "❌ FRP_AUTH_TOKEN secret not found. Set it to match your frps token."
+            exit 1
+          }
+          $remotePort = if ($env:FRP_REMOTE_PORT) { $env:FRP_REMOTE_PORT } else { "13389" }
+          $serverPort = if ($env:FRP_SERVER_PORT) { $env:FRP_SERVER_PORT } else { "7000" }
+
+          $frpcIni = "$env:TEMP\frpc.ini"
+          @"
+[common]
+server_addr = $($env:FRP_SERVER_ADDR)
+server_port = $serverPort
+auth.token = $($env:FRP_AUTH_TOKEN)
+log.level = info
+transport.tls.enable = true
+
+[rdp]
+type = tcp
+local_ip = 127.0.0.1
+local_port = 3389
+remote_port = $remotePort
+"@ | Set-Content -Path $frpcIni -Encoding UTF8
+
+          Write-Host "🔗 Connecting frpc to $($env:FRP_SERVER_ADDR):$serverPort (remote port $remotePort)..."
+          $frpcLog = "$env:TEMP\frpc.log"
+          Start-Process -FilePath $env:FRPC_PATH -ArgumentList "-c", $frpcIni -RedirectStandardOutput $frpcLog -RedirectStandardError $frpcLog -WindowStyle Hidden -PassThru | Out-Null
+          Start-Sleep -Seconds 8
+
+          $ok = $false
+          for ($i = 0; $i -lt 12; $i++) {
+            $log = Get-Content $frpcLog -Raw -ErrorAction SilentlyContinue
+            if ($log -match 'start proxy success|login to server success') { $ok = $true; break }
+            if ($log -match 'login to the server failed|connection refused|authorization failed') { break }
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "📄 frpc log (latest 15 lines):"
+          if (Test-Path $frpcLog) { Get-Content $frpcLog -Tail 15 | ForEach-Object { Write-Host "   $_" } }
+          if (-not $ok) {
+            Write-Error "❌ frpc did not report a successful proxy. Check frps is running and token matches."
+            exit 1
+          }
+          Write-Host "✅ FRP proxy established"
+          echo "FRP_ENDPOINT=$($env:FRP_SERVER_ADDR):$remotePort" >> $env:GITHUB_ENV
+
+      - name: ✅ Verify RDP Connectivity
+        run: |
+          Write-Host "🔍 Verifying RDP connectivity..."
+          $localTest = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389 -WarningAction SilentlyContinue
+          if (-not $localTest.TcpTestSucceeded) {
+            Write-Error "❌ Local RDP port 3389 is NOT listening."
+            exit 1
+          }
+          Write-Host "✅ Local RDP port 3389 is listening."
+          $remotePort = ($env:FRP_ENDPOINT -split ':')[-1]
+          Write-Host "🔍 Testing public endpoint $($env:FRP_SERVER_ADDR):$remotePort ..."
+          $pubTest = Test-NetConnection -ComputerName $env:FRP_SERVER_ADDR -Port $remotePort -WarningAction SilentlyContinue
+          if ($pubTest.TcpTestSucceeded) {
+            Write-Host "✅ Public FRP endpoint reachable."
+          } else {
+            Write-Host "⚠️ Public endpoint not reachable from the runner (firewall/NAT on frps host?)."
+            Write-Host "   RDP may still work from your own network — try mstsc to $($env:FRP_ENDPOINT)."
+          }
+
+      - name: 📋 Display RDP Access Info
+        run: |
+          Write-Host "`n🎯 === RDP ACCESS INFO (FRP) === 🎯"
+          Write-Host "💻 Computer: $env:FRP_ENDPOINT"
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "==============================="
+          Write-Host "📱 Cara Menyambung dari Devices Anda:"
+          Write-Host "1️⃣ Buka Remote Desktop Connection (mstsc)"
+          Write-Host "2️⃣ Masukkan Computer: $env:FRP_ENDPOINT"
+          Write-Host "3️⃣ Masukkan user: RDP | pass: $(${{ steps.create-user.outputs.RDP_PASSWORD }})"
+          Write-Host "4️⃣ Connect — trafik lewat frps server Anda"
+          Write-Host "=====================================`n"
+
+          $totalMinutes = 340
+          for ($i = 0; $i -lt $totalMinutes; $i++) {
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via FRP"
+            Start-Sleep -Seconds 60
+          }
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        run: |
+          Write-Host "🧹 Cleaning up frp client..."
+          $procs = Get-CimInstance Win32_Process -Filter "Name='frpc.exe'" -ErrorAction SilentlyContinue
+          if ($procs) {
+            foreach ($p in $procs) {
+              try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {}
+            }
+            Write-Host "✅ frpc stopped (PID: $($procs.ProcessId -join ', '))"
+          } else {
+            Write-Host "ℹ️ No frpc process found."
+          }
+          Write-Host "✅ Cleanup completed"

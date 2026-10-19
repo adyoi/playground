@@ -1,0 +1,309 @@
+name: Playground RDP (Nebula)
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 📋 Display Configuration Info
+        run: |
+          Write-Host "🔧 === PLAYGROUND RDP - NEBULA === 🔧"
+          Write-Host "📦 Repository: ${{ github.repository }}"
+          Write-Host "🆔 Run ID: ${{ github.run_id }}"
+          Write-Host "👤 Triggered by: ${{ github.actor }}"
+          Write-Host "===================================="
+
+      - name: ⚙️ Configure Core RDP Settings
+        run: |
+          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
+          netsh advfirewall firewall delete rule name="RDP-Nebula" 2>nul
+          netsh advfirewall firewall add rule name="RDP-Nebula" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP & Firewall configured"
+
+      - name: 👤 Create RDP User
+        id: create-user
+        run: |
+          Write-Host "👤 Creating RDP user..."
+          $customPass = "${{ github.event.inputs.custom_password }}"
+          if ($customPass -ne "") {
+            $password = $customPass
+          } else {
+            Add-Type -AssemblyName System.Security
+            $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+            $rawPassword = @()
+            $rawPassword += $charSet.Upper | Get-Random -Count 4
+            $rawPassword += $charSet.Lower | Get-Random -Count 4
+            $rawPassword += $charSet.Number | Get-Random -Count 4
+            $rawPassword += $charSet.Special | Get-Random -Count 4
+            $password = -join ($rawPassword | Sort-Object { Get-Random })
+          }
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "RDP" -Force
+          }
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            Write-Error "❌ User creation failed"
+            exit 1
+          }
+          Write-Host "✅ RDP user created with secure password"
+
+      - name: 🔌 Install Nebula
+        run: |
+          Write-Host "🔌 Installing Nebula (v1.11.2)..."
+          $nebulaUrl = "https://github.com/slackhq/nebula/releases/download/v1.11.2/nebula-windows-amd64.zip"
+          $zipPath = "$env:TEMP\nebula.zip"
+          $extractDir = "$env:TEMP\nebula"
+          Invoke-WebRequest -Uri $nebulaUrl -OutFile $zipPath
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+          $nebulaExe = (Get-ChildItem -Path $extractDir -Filter "nebula.exe" -Recurse | Select-Object -First 1).FullName
+          $nebulaCert = (Get-ChildItem -Path $extractDir -Filter "nebula-cert.exe" -Recurse | Select-Object -First 1).FullName
+          if (-not $nebulaExe) { Write-Error "❌ nebula.exe not found"; exit 1 }
+          Write-Host "✅ Nebula binary: $nebulaExe"
+          Write-Host "✅ Nebula cert: $nebulaCert"
+          echo "NEBULA_BIN=$nebulaExe" >> $env:GITHUB_ENV
+          echo "NEBULA_CERT_BIN=$nebulaCert" >> $env:GITHUB_ENV
+
+      - name: 🔗 Setup Nebula Config + Cert
+        env:
+          NEBULA_CA_CRT: ${{ secrets.NEBULA_CA_CRT }}
+          NEBULA_CA_KEY: ${{ secrets.NEBULA_CA_KEY }}
+          NEBULA_LIGHTHOUSE: ${{ vars.NEBULA_LIGHTHOUSE || 'lighthouse.example.com:51820' }}
+        run: |
+          if (-not $env:NEBULA_CA_CRT -or -not $env:NEBULA_CA_KEY) {
+            Write-Error "❌ Secret NEBULA_CA_CRT dan NEBULA_CA_KEY (base64 atau teks) belum diisi."
+            Write-Host "   Ini adalah CA (ca.crt + ca.key) dari Nebula Anda."
+            Write-Host "   Anda bisa buat CA baru dengan: nebula-cert ca -name \"My CA\" -out-crt ca.crt -out-key ca.key"
+            exit 1
+          }
+          # Tulis CA ke file sementara
+          $caDir = "$env:TEMP\nebula-ca"
+          if (-not (Test-Path $caDir)) { New-Item -ItemType Directory -Path $caDir -Force | Out-Null }
+          $caCrtPath = Join-Path $caDir "ca.crt"
+          $caKeyPath = Join-Path $caDir "ca.key"
+          [System.IO.File]::WriteAllText($caCrtPath, $env:NEBULA_CA_CRT)
+          [System.IO.File]::WriteAllText($caKeyPath, $env:NEBULA_CA_KEY)
+          Write-Host "✅ CA files written"
+
+          # Generate unique host cert for this runner
+          $runName = "gh-runner-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          $certDir = "$env:TEMP\nebula-host"
+          if (-not (Test-Path $certDir)) { New-Item -ItemType Directory -Path $certDir -Force | Out-Null }
+          $hostCrt = Join-Path $certDir "$runName.crt"
+          $hostKey = Join-Path $certDir "$runName.key"
+          # IP tetap untuk runner sementara (tidak bertabrakan dengan PC yang biasa 10.42.0.1)
+          $tunnelNet = $env:NEBULA_LIGHTHOUSE.Split(':')[0]
+          # Ambil subnet dari var atau default 10.42.0.0/24; pilih IP dalam range 200-254 (random)
+          $ipRange = $env:NEBULA_TUNNEL_SUBNET
+          if (-not $ipRange) { $ipRange = "10.42.0.0/24" }
+          # Sederhana: pakai 10.42.0.200/24 sebagai IP tetap runner (tidak acak agar mudah)
+          $hostIp = "10.42.0.200/24"
+          Write-Host "🔐 Minting host certificate: $runName (IP $hostIp)..."
+          $certArgs = "ca","-ca-crt",$caCrtPath,"-ca-key",$caKeyPath,"-name",$runName,"-ip",$hostIp,"-groups","playground","-out-crt",$hostCrt,"-out-key",$hostKey
+          # nebula-cert subcommand: "nebula-cert ca ..."
+          $fullArgs = @("ca","-ca-crt",$caCrtPath,"-ca-key",$caKeyPath,"-name",$runName,"-ip",$hostIp,"-groups","playground","-out-crt",$hostCrt,"-out-key",$hostKey)
+          # Panggil langsung binary cert
+          & $env:NEBULA_CERT_BIN $fullArgs 2>&1
+          if (-not (Test-Path $hostCrt) -or -not (Test-Path $hostKey)) {
+            Write-Error "❌ Gagal membuat sertifikat host Nebula. Cek CA dan variabel."
+            exit 1
+          }
+          Write-Host "✅ Host cert: $hostCrt"
+
+          # Parse lighthouse host:port
+          $lhParts = $env:NEBULA_LIGHTHOUSE.Split(':')
+          $lhHost = $lhParts[0]
+          $lhPort = if ($lhParts.Length -gt 1) { $lhParts[1] } else { "51820" }
+
+          $confDir = "$env:TEMP\nebula"
+          if (-not (Test-Path $confDir)) { New-Item -ItemType Directory -Path $confDir -Force | Out-Null }
+          $confPath = Join-Path $confDir "config.yml"
+          @"
+pki:
+  ca: '$caCrtPath'
+  cert: '$hostCrt'
+  key: '$hostKey'
+
+static_host_map:
+  # Host ini adalah runner sementara; pengguna bisa menambahkan host PC mereka sendiri
+  # dengan IP tetap 10.42.0.1 dan sertifikat dari CA yang sama.
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+  - '127.0.0.1'
+
+listen:
+  host: 0.0.0.0
+  port: $lhPort
+
+punch_back: true
+  punch_back_interval: 30
+
+tunnel:
+  # Gunakan subnet tetap
+  cidr: 10.42.0.0/24
+
+# Firewall: semua lalu lintas IP dengan port 3389 dibuka untuk RDP
+firewall:
+  conntrack:
+    tcp:
+      timeout: 5m
+    udp:
+      timeout: 3m
+  outbound:
+  - port: any
+    proto: any
+    host: any
+  inbound:
+    # Izinkan RDP dari semua peer mesh
+  - port: 3389
+    proto: tcp
+    host: any
+"@ | Set-Content -Path $confPath -Encoding UTF8
+          echo "NEBULA_CONF=$confPath" >> $env:GITHUB_ENV
+          echo "NEBULA_HOST_IP=$hostIp" >> $env:GITHUB_ENV
+
+      - name: 🔗 Start Nebula
+        env:
+          NEBULA_CONF: ${{ vars.NEBULA_CONF || '' }}
+        run: |
+          # Cek apakah conf sudah dibuat dari langkah sebelumnya
+          $confPath = $env:NEBULA_CONF
+          if (-not $confPath -or -not (Test-Path $confPath)) {
+            # Fallback: coba cari conf yang baru dibuat
+            $confPath = (Get-ChildItem -Path $env:TEMP -Recurse -Filter "config.yml" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+          }
+          if (-not (Test-Path $confPath)) {
+            Write-Error "❌ Nebula config tidak ditemukan. Pastikan langkah 'Setup Config' berhasil."
+            exit 1
+          }
+          Write-Host "🔗 Memulai Nebula dengan config: $confPath"
+          $nebulaBin = $env:NEBULA_BIN
+          $logPath = "$env:TEMP\nebula-run.log"
+          Start-Process -FilePath $nebulaBin -ArgumentList "-config", $confPath -RedirectStandardOutput $logPath -RedirectStandardError $logPath -WindowStyle Hidden -PassThru | Out-Null
+          # Tunggu interface dan peer
+          $hostIp = $env:NEBULA_HOST_IP
+          $tunnelUp = $false
+          for ($i = 0; $i -lt 24; $i++) {
+            $ifaceInfo = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -match 'nebula' -or $_.IPAddress -like '10.42.0.*' }
+            # Cek log
+            $logContent = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+            if ($logContent -match 'handshake completed' -or $logContent -match 'tunnel up') {
+              Write-Host "✅ Nebula tunnel handshake / tunnel up terdeteksi."
+              $tunnelUp = $true
+              break
+            }
+            Write-Host "   ... menunggu Nebula ($($i*5)s): interface / handshake / lighthouse ..."
+            Start-Sleep -Seconds 5
+          }
+          if (-not $tunnelUp) {
+            Write-Host "⚠️ Nebula belum melaporkan 'tunnel up' dalam 2 menit — ini normal jika lighthouse belum merespons."
+            Write-Host "   Tunnel mungkin tetap berfungsi; coba sambungkan dari PC Anda."
+          }
+          Write-Host "📋 Log Nebula (10 baris terakhir):"
+          if (Test-Path $logPath) { Get-Content $logPath -Tail 10 | ForEach-Object { Write-Host "   $_" } }
+          # Coba ambil IP tunnel dari interface
+          $iface = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '10.42.0.*' }
+          if ($iface) {
+            echo "NEBULA_TUNNEL_IP=$($iface.IPAddress.Split('/')[0])" >> $env:GITHUB_ENV
+            Write-Host "✅ Tunnel interface IP: $($iface.IPAddress)"
+          } else {
+            echo "NEBULA_TUNNEL_IP=$hostIp" >> $env:GITHUB_ENV
+            Write-Host "✅ Expected tunnel IP (belum diverifikasi interface): $hostIp"
+          }
+
+      - name: ✅ Verify RDP Connectivity
+        run: |
+          Write-Host "🔍 Verifying RDP connectivity over Nebula..."
+          $localTest = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389 -WarningAction SilentlyContinue
+          if (-not $localTest.TcpTestSucceeded) {
+            Write-Error "❌ Local RDP port 3389 is NOT listening."
+            exit 1
+          }
+          Write-Host "✅ Local RDP port 3389 listening."
+
+          $peerIp = $env:NEBULA_PEER_TUNNEL_IP
+          if (-not $peerIp) { $peerIp = "10.42.0.1" }
+          Write-Host "🔍 Testing mesh reachability to peer $peerIp ..."
+          $meshTest = Test-NetConnection -ComputerName $peerIp -Port 3389 -WarningAction SilentlyContinue
+          if ($meshTest.TcpTestSucceeded) {
+            Write-Host "✅ Mesh connectivity to peer verified!"
+          } else {
+            Write-Host "⚠️ Mesh connectivity belum terverifikasi (lighthouse mungkin belum merespons, atau PC belum join)."
+            Write-Host "   Ini normal; coba sambungkan dari PC Anda yang sudah join Nebula mesh."
+          }
+
+      - name: 📋 Display RDP Access Info
+        run: |
+          $hostIp = $env:NEBULA_TUNNEL_IP
+          if (-not $hostIp) { $hostIp = "Lihat $env:NEBULA_CONF / step summary" }
+          Write-Host "`n🎯 === RDP ACCESS INFO (NEBULA) === 🎯"
+          Write-Host "💻 Computer: $hostIp (jika mesh berjalan, sambung lewat IP ini)"
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "==============================="
+          Write-Host "📱 Cara Menyambung dari Devices Anda:"
+          Write-Host "1️⃣ PC Anda harus menggunakan sertifikat dari CA yang sama (NEBULA_CA_CRT / CA_KEY)."
+          Write-Host "2️⃣ PC Anda join Nebula mesh (config sama dengan lighthouse ini, IP tetap seperti 10.42.0.1)."
+          Write-Host "3️⃣ Buka Remote Desktop Connection (mstsc) -> Computer: $hostIp"
+          Write-Host "4️⃣ Masukkan user: RDP | pass: $(${{ steps.create-user.outputs.RDP_PASSWORD }})"
+          Write-Host "=====================================`n"
+          Write-Host "ℹ️ Alur: Runner = satu host di mesh; PC Anda = host lain. Keduanya terhubung lewat lighthouse / mesh."
+          Write-Host "   Cert baru untuk runner sudah dibuat otomatis; PC Anda perlu cert dari CA yang sama (bukan cert ini)."
+
+          $totalMinutes = 340
+          for ($i = 0; $i -lt $totalMinutes; $i++) {
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Nebula"
+            Start-Sleep -Seconds 60
+          }
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        run: |
+          Write-Host "🧹 Cleaning up Nebula..."
+          $proc = Get-Process -Name "nebula" -ErrorAction SilentlyContinue
+          if ($proc) {
+            try { $proc | Stop-Process -Force -ErrorAction Stop } catch {}
+            Write-Host "✅ Nebula process stopped (PID: $($proc.Id -join ', '))"
+          } else {
+            Write-Host "ℹ️ No nebula process found."
+          }
+          # Hapus file konfigurasi sementara
+          $confFiles = Get-ChildItem -Path $env:TEMP -Filter "config.yml" -Recurse -ErrorAction SilentlyContinue
+          $certFiles = Get-ChildItem -Path $env:TEMP -Filter "nebula-host" -Recurse -ErrorAction SilentlyContinue
+          Write-Host "✅ Cleanup completed"

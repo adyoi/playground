@@ -135,17 +135,8 @@ jobs:
           if (-not (Test-Path $confDir)) { New-Item -ItemType Directory -Path $confDir -Force | Out-Null }
           $confPath = Join-Path $confDir "wg0.conf"
 
-          @"
-[Interface]
-PrivateKey = $($env:WG_CLIENT_PRIVATE_KEY.Trim())
-Address = $($env:WG_CLIENT_TUNNEL_IP)
-
-[Peer]
-PublicKey = $($env:WG_SERVER_PUBLIC_KEY.Trim())
-Endpoint = $($env:WG_SERVER_ENDPOINT)
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-"@ | Set-Content -Path $confPath -Encoding ASCII
+          $confContent = "[Interface]`nPrivateKey = $($env:WG_CLIENT_PRIVATE_KEY.Trim())`nAddress = $($env:WG_CLIENT_TUNNEL_IP)`n`n[Peer]`nPublicKey = $($env:WG_SERVER_PUBLIC_KEY.Trim())`nEndpoint = $($env:WG_SERVER_ENDPOINT)`nAllowedIPs = 0.0.0.0/0`nPersistentKeepalive = 25"
+          $confContent | Set-Content -Path $confPath -Encoding ASCII
 
           Write-Host "🔗 Installing WireGuard tunnel (wg0)..."
           $uninstall = & $env:WG_EXE /uninstalltunnelservice wg0 2>&1

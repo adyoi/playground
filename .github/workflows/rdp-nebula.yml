@@ -150,49 +150,52 @@ jobs:
           $confDir = "$env:TEMP\nebula"
           if (-not (Test-Path $confDir)) { New-Item -ItemType Directory -Path $confDir -Force | Out-Null }
           $confPath = Join-Path $confDir "config.yml"
-          @"
-pki:
-  ca: '$caCrtPath'
-  cert: '$hostCrt'
-  key: '$hostKey'
+          # Config ditulis tanpa interpolasi: pakai placeholder lalu .Replace().
+          # (menghindari masalah parsing PowerShell dengan variabel di dalam string).
+          $confTemplate = 'pki:'
+            ca: '__CA_CRT__'
+            cert: '__HOST_CRT__'
+            key: '__HOST_KEY__'
 
-static_host_map:
-  # Host ini adalah runner sementara; pengguna bisa menambahkan host PC mereka sendiri
-  # dengan IP tetap 10.42.0.1 dan sertifikat dari CA yang sama.
+          static_host_map:
 
-lighthouse:
-  am_lighthouse: false
-  interval: 60
-  hosts:
-  - '$lhHost:$lhPort'
+          lighthouse:
+            am_lighthouse: false
+            interval: 60
+            hosts:
+            - '__LIGHTHOUSE__'
 
-listen:
-  host: 0.0.0.0
-  port: $lhPort
+          listen:
+            host: 0.0.0.0
+            port: __LH_PORT__
 
-punch_back: true
-  punch_back_interval: 30
+          punch_back: true
+            punch_back_interval: 30
 
-tunnel:
-  # Gunakan subnet tetap
-  cidr: 10.42.0.0/24
+          tunnel:
+            cidr: 10.42.0.0/24
 
-# Firewall: semua lalu lintas IP dengan port 3389 dibuka untuk RDP
-firewall:
-  conntrack:
-    tcp:
-      timeout: 5m
-    udp:
-      timeout: 3m
-  outbound:
-  - port: any
-    proto: any
-    host: any
-  inbound:
-  - port: 3389
-    proto: tcp
-    host: any
-"@ | Set-Content -Path $confPath -Encoding UTF8
+          firewall:
+            conntrack:
+              tcp:
+                timeout: 5m
+              udp:
+                timeout: 3m
+            outbound:
+            - port: any
+              proto: any
+              host: any
+            inbound:
+            - port: 3389
+              proto: tcp
+              host: any'
+          $confContent = $confTemplate.
+            Replace('__CA_CRT__', $caCrtPath).
+            Replace('__HOST_CRT__', $hostCrt).
+            Replace('__HOST_KEY__', $hostKey).
+            Replace('__LIGHTHOUSE__', "$($lhHost):$($lhPort)").
+            Replace('__LH_PORT__', $lhPort)
+          $confContent | Set-Content -Path $confPath -Encoding UTF8
           echo "NEBULA_CONF=$confPath" >> $env:GITHUB_ENV
           echo "NEBULA_HOST_IP=$hostIp" >> $env:GITHUB_ENV
 

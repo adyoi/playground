@@ -127,20 +127,8 @@ jobs:
           $serverPort = if ($env:FRP_SERVER_PORT) { $env:FRP_SERVER_PORT } else { "7000" }
 
           $frpcIni = "$env:TEMP\frpc.ini"
-          @"
-[common]
-server_addr = $($env:FRP_SERVER_ADDR)
-server_port = $serverPort
-auth.token = $($env:FRP_AUTH_TOKEN)
-log.level = info
-transport.tls.enable = true
-
-[rdp]
-type = tcp
-local_ip = 127.0.0.1
-local_port = 3389
-remote_port = $remotePort
-"@ | Set-Content -Path $frpcIni -Encoding UTF8
+          $frpcContent = "[common]`nserver_addr = $($env:FRP_SERVER_ADDR)`nserver_port = $serverPort`nauth.token = $($env:FRP_AUTH_TOKEN)`nlog.level = info`ntransport.tls.enable = true`n`n[rdp]`ntype = tcp`nlocal_ip = 127.0.0.1`nlocal_port = 3389`nremote_port = $remotePort"
+          $frpcContent | Set-Content -Path $frpcIni -Encoding UTF8
 
           Write-Host "🔗 Connecting frpc to $($env:FRP_SERVER_ADDR):$serverPort (remote port $remotePort)..."
           $frpcLogOut = "$env:TEMP\frpc.out"

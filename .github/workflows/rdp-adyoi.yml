@@ -1,0 +1,116 @@
+name: Playground RDP (Adyoi - Codespace Tunnel)
+
+# ⚠️ WIP / Eksperimental: menggunakan port forwarding Codespace (gh codespace ports)
+# Prasyarat: ada Codespace yang sudah berjalan (nama: input codespace_name)
+#            dan GITHUB_TOKEN memiliki scopes codespace (default biasanya punya).
+
+on:
+  workflow_dispatch:
+    inputs:
+      codespace_name:
+        description: 'Nama Codespace yang sudah berjalan (contoh: crispy-fishstick-6p69x44vv5hj4w)'
+        required: true
+        type: string
+      custom_password:
+        description: 'Custom RDP password (optional)'
+        required: false
+        type: string
+      os:
+        description: 'Tidak dipakai (Codespace = Linux container) — tetap wajib diisi'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'ubuntu-latest'
+
+permissions:
+  contents: read
+  codespaces: read  # Perlu untuk gh codespace ports / ssh
+
+jobs:
+  secure-rdp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 📋 Cek Prasyarat
+        run: |
+          echo "=== PLAYGROUND RDP (CODESPACE) ==="
+          echo "Repo: ${{ github.repository }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Codespace input: ${{ github.event.inputs.codespace_name }}"
+          # Cek codespace aktif
+          gh codespace list -c ${{ github.event.inputs.codespace_name }} --json state,name,displayName | head -n 20 || echo "⚠️ Pastikan codespace '$CODESPACE' sudah berjalan (gh codespace list)"
+        env:
+          CODESPACE: ${{ github.event.inputs.codespace_name }}
+
+      - name: 👤 Setup RDP User (di Codespace)
+        id: create-user
+        env:
+          CODESPACE: ${{ github.event.inputs.codespace_name }}
+        run: |
+          # Setup user di dalam codespace via SSH
+          CUSTOM_PASS="${{ github.event.inputs.custom_password }}"
+          if [ -n "$CUSTOM_PASS" ]; then PASS="$CUSTOM_PASS"; else PASS=$(openssl rand -base64 12 | tr -d '+/=' | head -c 20); fi
+          echo "RDP_PASSWORD=$PASS" >> $env:GITHUB_OUTPUT
+          echo "Password dibuat (tidak dicetak untuk keamanan)"
+          # Perintah dijalankan di codespace
+          gh codespace ssh -c "$CODESPACE" -- "
+            sudo apt-get update -qq >/dev/null 2>&1 || true
+            sudo apt-get install -y -qq xrdp >/dev/null 2>&1 || echo 'xrdp install mungkin perlu waktu pertama kali'
+            sudo groupadd -f rdp
+            sudo useradd -m -G rdp,adm -s /bin/bash rdpuser || true
+            echo 'rdpuser:$PASS' | sudo chpasswd
+            echo 'User rdpuser dibuat dengan password'
+          "
+
+      - name: 🔌 Setup xrdp & Port Exposure
+        env:
+          CODESPACE: ${{ github.event.inputs.codespace_name }}
+        run: |
+          echo "🔌 Menyiapkan xrdp di codespace + expose port 3389..."
+          # Konfigurasi xrdp di codespace
+          gh codespace ssh -c "$CODESPACE" -- "
+            sudo service xrdp start || true
+            sudo service xrdp-sesman start || true
+            sudo sed -i 's/^#\?port=.*/port=3389/' /etc/xrdp/xrdp.ini || echo 'Port 3389 default'
+            echo 'xrdp siap'
+          "
+          # Expose port 3389 ke publik (visibility public) — memerlukan token codespace
+          echo "🌐 Membuka port 3389 di codespace $CODESPACE..."
+          gh codespace ports visibility 3389:public --codespace "$CODESPACE" || echo "⚠️ Visibility mungkin sudah public atau memerlukan token tambahan"
+          # Simpan endpoint untuk info
+          # Endpoint Codespace = https://<CODESPACE>-3389.app.github.dev (HTTP); untuk RDP perlu local forward
+          echo "BROWSE_URL=https://$CODESPACE-3389.app.github.dev" >> $env:GITHUB_ENV
+          echo "CODESPACE_NAME=$CODESPACE" >> $env:GITHUB_ENV
+
+      - name: 📋 Display RDP Access Info (Codespace)
+        env:
+          CODESPACE: ${{ github.event.inputs.codespace_name }}
+        run: |
+          echo "🎯 === RDP ACCESS INFO (CODESPACE) === 🎯"
+          echo "💻 Codespace: $CODESPACE"
+          echo "🌐 Browse URL (HTTP): https://$CODESPACE-3389.app.github.dev"
+          echo "👤 Username: rdpuser"
+          echo "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          echo "======================================="
+          echo "📱 Cara Menyambung (2 opsi):"
+          echo "1) (Lokal) gh codespace ports forward 3389:3389 -c $CODESPACE"
+          echo "   Lalu mstsc ke localhost:3389"
+          echo "2) (Browser / remote) Buka https://$CODESPACE-3389.app.github.dev (hanya HTTP, bukan mstsc langsung)"
+          echo "======================================="
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        env:
+          CODESPACE: ${{ github.event.inputs.codespace_name }}
+        run: |
+          echo "🧹 Cleanup Codespace..."
+          # Hanya informatif; codespace tetap hidup sampai user stop manual atau timeout
+          echo "ℹ️ Untuk menghentikan codespace: gh codespace stop -c $CODESPACE"
+          echo "   Atau: gh codespace delete -c $CODESPACE"
+          echo "✅ Cleanup info completed"

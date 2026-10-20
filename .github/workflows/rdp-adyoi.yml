@@ -54,6 +54,23 @@ jobs:
           Write-Host "Codespace : $env:CODESPACE"
           Write-Host "==================================="
 
+      - name: 🐧 Cek WSL (prasyarat opsional)
+        run: |
+          Write-Host "🐧 Mengecek WSL di runner $env:RUNNER_OS ..."
+          $status = wsl --status 2>&1 | Out-String
+          Write-Host $status
+          $distros = wsl -l -q 2>&1 | Out-String
+          Write-Host "Distro WSL tersedia: $distros"
+          if ($distros.Trim()) {
+            $distro = ($distros.Trim() -split "`n")[0].Trim()
+            Write-Host "✅ WSL tersedia ($distro)."
+            "GH_IN_WSL=$distro" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
+          } else {
+            Write-Host "⚠️ WSL tidak tersedia di runner ini (normal untuk windows-latest hosted)."
+            Write-Host "   Workflow akan lanjut dengan native pwsh + gh."
+            "GH_IN_WSL=none" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
+          }
+
       - name: 🔍 Cek Codespace
         run: |
           Write-Host "🔍 Memeriksa codespace $env:CODESPACE..."

@@ -1,4 +1,4 @@
-name: Playground RDP (Adyoi - Codespace Tunnel)
+name: Playground RDP (adyoi)
 
 # ⚠️ WIP / Eksperimental: menggunakan port forwarding Codespace (gh codespace ports)
 # Prasyarat: ada Codespace yang sudah online (input codespace_name) + GITHUB_TOKEN punya scope codespace.

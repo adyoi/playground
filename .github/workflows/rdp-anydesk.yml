@@ -104,12 +104,12 @@ jobs:
 
       - name: ✅ Verify AnyDesk Running
         run: |
-          $chk = sudo anydesk --status 2>&1 | Out-String || echo "Status check completed"
-          Write-Host $chk
-          if ($chk -match "running" -or $chk -match "OK") {
-            Write-Host "✅ AnyDesk aktif."
+          if ($env:RUNNER_OS -match "Linux") {
+            $chk = sudo systemctl status anydesk --no-pager 2>&1 | Out-String || echo "Status check done"
+            Write-Host $chk
+            if ($chk -match "running" -or $chk -match "OK") { Write-Host "✅ AnyDesk aktif." } else { Write-Host "⚠️ AnyDesk belum terkonfirmasi aktif." }
           } else {
-            Write-Host "⚠️ AnyDesk belum terkonfirmasi aktif — periksa manual via AnyDesk app."
+            Write-Host "⚠️ Windows runner: verifikasi manual via AnyDesk app (MSI belum terinstall otomatis)."
           }
 
       - name: 📋 Display Info
@@ -126,6 +126,10 @@ jobs:
         if: cancelled() || failure()
         run: |
           Write-Host "🧹 Cleanup AnyDesk..."
-          sudo systemctl stop anydesk 2>&1 | Out-Null || true
-          sudo apt-get remove -y -qq anydesk 2>&1 | Out-Null || true
+          if ($env:RUNNER_OS -match "Linux") {
+            sudo systemctl stop anydesk 2>&1 | Out-Null || true
+            sudo apt-get remove -y -qq anydesk 2>&1 | Out-Null || true
+          } else {
+            Write-Host "⚠️ Windows runner: hapus manual AnyDesk MSI jika terinstall."
+          }
           Write-Host "✅ Cleanup AnyDesk completed"

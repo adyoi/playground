@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       codespace_name:
-        description: 'Nama Codespace yang sudah berjalan (contoh: crispy-fishstick-6p69x44vv5hj4w)'
+        description: 'Codespace yang sudah online (contoh: adyoi-playground-7xqvjprgjqhpxv7)'
         required: true
         type: string
       custom_password:

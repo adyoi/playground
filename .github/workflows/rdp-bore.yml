@@ -1,0 +1,150 @@
+name: Playground RDP (Bore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Custom RDP password (optional, auto-generated if empty)'
+        required: false
+        type: string
+      os:
+        description: 'Runner OS image'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        default: 'windows-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 📋 Display Configuration Info
+        run: |
+          Write-Host "🔧 === PLAYGROUND RDP - BORE === 🔧"
+          Write-Host "📦 Repository: ${{ github.repository }}"
+          Write-Host "🆔 Run ID: ${{ github.run_id }}"
+          Write-Host "👤 Triggered by: ${{ github.actor }}"
+          Write-Host "===================================="
+
+      - name: ⚙️ Configure Core RDP Settings
+        run: |
+          Write-Host "🔧 Mengaktifkan RDP & Firewall..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fSingleSessionPerUser" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "AllowRemoteRPC" -Value 1 -Force
+          netsh advfirewall firewall delete rule name="RDP-Bore" 2>nul
+          netsh advfirewall firewall add rule name="RDP-Bore" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP & Firewall configured"
+
+      - name: 👤 Create RDP User
+        id: create-user
+        run: |
+          Write-Host "👤 Creating RDP user..."
+          $customPass = "${{ github.event.inputs.custom_password }}"
+          if ($customPass -ne "") {
+            $password = $customPass
+          } else {
+            Add-Type -AssemblyName System.Security
+            $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+            $rawPassword = @()
+            $rawPassword += $charSet.Upper | Get-Random -Count 4
+            $rawPassword += $charSet.Lower | Get-Random -Count 4
+            $rawPassword += $charSet.Number | Get-Random -Count 4
+            $rawPassword += $charSet.Special | Get-Random -Count 4
+            $password = -join ($rawPassword | Sort-Object { Get-Random })
+          }
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "RDP" -Force
+          }
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_OUTPUT
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            Write-Error "❌ User creation failed"
+            exit 1
+          }
+          Write-Host "✅ RDP user created with secure password"
+
+      - name: 🔌 Install Bore
+        run: |
+          Write-Host "🔌 Downloading Bore (v0.5.9) ..."
+          $url = "https://github.com/slok/bore/releases/download/v0.5.9/bore-v0.5.9-windows-amd64.zip"
+          $zip = "$env:TEMP\bore.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $dir = "$env:TEMP\bore"
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          $exe = (Get-ChildItem -Path $dir -Filter "bore.exe" -Recurse | Select-Object -First 1).FullName
+          if (-not $exe) { Write-Error "❌ bore.exe not found"; exit 1 }
+          Write-Host "✅ Bore: $exe"
+          echo "BORE_BIN=$exe" >> $env:GITHUB_ENV
+
+      - name: 🔗 Establish Bore Tunnel
+        env:
+          BORE_LOCAL_PORT: 3389
+        run: |
+          Write-Host "🔗 Starting Bore local tunnel (no account needed)..."
+          $log = "$env:TEMP\bore-$(Get-Random -Maximum 9999).log"
+          $proc = Start-Process -FilePath $env:BORE_BIN -ArgumentList "local","$env:BORE_LOCAL_PORT","--to","bore.pub","--debug" -RedirectStandardOutput $log -RedirectStandardError $log -WindowStyle Hidden -PassThru
+          Write-Host "✅ Bore process started (PID: $($proc.Id))"
+          Start-Sleep -Seconds 10
+          # Bore prints tunnel URL to stdout; try to extract
+          $line = Get-Content $log -Raw -ErrorAction SilentlyContinue
+          Write-Host "📄 Bore log (last 10):"
+          Get-Content $log -Tail 10 | ForEach-Object { Write-Host "   $_" }
+          # Try parse public URL; bore uses random port + bore.pub relay
+          $urlMatch = [regex]::Match($line, 'tunnel://([a-zA-Z0-9._-]+:[0-9]+)')
+          if (-not $urlMatch.Success) {
+            $urlMatch = [regex]::Match($line, '([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+)')
+          }
+          if ($urlMatch.Success) {
+            $hostPort = $urlMatch.Groups[0].Value
+            Write-Host "✅ Tunnel endpoint detected: $hostPort"
+            echo "BORE_ENDPOINT=$hostPort" >> $env:GITHUB_ENV
+          } else {
+            Write-Warning "⚠️ Tunnel URL belum terdeteksi — coba coba manual dari log atau gunakan IP publik runner sebagai endpoint."
+            # Fallback: expose via runner IP + same port (bore assigns random)
+          }
+
+      - name: ✅ Verify RDP Connectivity
+        run: |
+          Write-Host "🔍 Verifying RDP connectivity..."
+          $local = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389 -WarningAction SilentlyContinue
+          if (-not $local.TcpTestSucceeded) { Write-Error "❌ Local RDP not listening"; exit 1 }
+          Write-Host "✅ Local RDP 3389 listening."
+
+      - name: 📋 Display RDP Access Info
+        run: |
+          Write-Host "`n🎯 === RDP ACCESS INFO (BORE) === 🎯"
+          Write-Host "💻 Computer: $($env:BORE_ENDPOINT -split ':' | Select-Object -First 1) (port $($env:BORE_ENDPOINT -split ':' | Select-Object -Last 1))"
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "==============================="
+          Write-Host "📱 Cara Menyambung: buka mstsc, masukkan endpoint di atas"
+          Write-Host "=====================================`n"
+
+      - name: 🧹 Cleanup on Cancel/Failure
+        if: cancelled() || failure()
+        run: |
+          Write-Host "🧹 Cleaning up Bore..."
+          $procs = Get-CimInstance Win32_Process -Filter "Name='bore.exe'" -ErrorAction SilentlyContinue
+          if ($procs) {
+            $procs | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force } catch {} }
+            Write-Host "✅ Bore stopped"
+          } else { Write-Host "ℹ️ No bore process found." }
+          Write-Host "✅ Cleanup completed"

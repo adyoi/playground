@@ -32,6 +32,9 @@ jobs:
   secure-rdp:
     runs-on: ${{ github.event.inputs.os }}
     timeout-minutes: 3600
+    env:
+      GITHUB_TOKEN: ${{ secrets.GH_CODESPA_TOKEN || github.token }}
+      GH_TOKEN: ${{ secrets.GH_CODESPA_TOKEN || github.token }}
     defaults:
       run:
         shell: pwsh

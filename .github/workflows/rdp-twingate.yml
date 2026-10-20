@@ -104,7 +104,11 @@ jobs:
             $keyPath = "$env:TEMP\twingate_service_key.json"
             [System.IO.File]::WriteAllText($keyPath, $env:TWINGATE_SERVICE_KEY)
             try {
-              Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msi`" /quiet service_secret=`"$keyPath`""
+              # Sintaks resmi Twingate: service_secret=<path> (tanpa quote tambahan)
+              $msiArgs = "/i `"$msi`" /l*v `"$env:TEMP\twingate_install.log`" log_level=debug service_secret=$keyPath /quiet"
+              Write-Host "   msiexec args: $msiArgs"
+              $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
+              Write-Host "   msiexec exit code: $($p.ExitCode)"
             } finally {
               Remove-Item $keyPath -Force -ErrorAction SilentlyContinue
             }
@@ -112,20 +116,47 @@ jobs:
             Write-Warning "⚠️ Secret TWINGATE_SERVICE_KEY kosong -> install tanpa headless (client tidak akan online)."
             Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msi`" /quiet"
           }
-          Write-Host "✅ Twingate client installed"
+          # Service mungkin butuhbeat_ms untuk register setelah install
+          for ($i = 0; $i -lt 30; $i++) {
+            if (Get-Service -Name "twingate.service" -ErrorAction SilentlyContinue) { break }
+            Start-Sleep -Seconds 2
+          }
+          $svcCheck = Get-Service -Name "twingate.service" -ErrorAction SilentlyContinue
+          if (-not $svcCheck) {
+            Write-Error "❌ Service twingate.service tidak terdaftar setelah install."
+            Write-Host "   Log install: $env:TEMP\twingate_install.log"
+            if (Test-Path "$env:TEMP\twingate_install.log") { Get-Content "$env:TEMP\twingate_install.log" -Tail 25 | ForEach-Object { Write-Host "   $_" } }
+            exit 1
+          }
+          Write-Host "✅ Twingate client installed (service: $($svcCheck.Status))"
 
       - name: 🔗 Establish Twingate Connection
         run: |
           Write-Host "🔗 Starting Twingate service..."
-          $svc = Get-Service -Name "twingate.service" -ErrorAction SilentlyContinue
-          if (-not $svc) {
-            Write-Error "❌ Service twingate.service tidak ditemukan setelah install."
+          Write-Host "🔗 Starting Twingate service (dengan retry)..."
+          $maxRetries = 5
+          $wait = 5
+          $started = $false
+          for ($r = 0; $r -lt $maxRetries; $r++) {
+            try {
+              $svc = Get-Service -Name "twingate.service" -ErrorAction Stop
+              if ($svc.Status -eq 'Stopped') { Start-Service -Name "twingate.service" -ErrorAction Stop }
+              Start-Sleep -Seconds $wait
+              $svc = Get-Service -Name "twingate.service" -ErrorAction Stop
+              if ($svc.Status -eq 'Running') {
+                Write-Host "✅ Service running (try $($r+1))."
+                $started = $true
+                break
+              }
+            } catch {
+              Write-Host "⚠️ Try $($r+1) gagal: $_"
+            }
+            $wait += 5
+          }
+          if (-not $started) {
+            Write-Error "❌ Twingate service gagal start setelah $maxRetries retries. Cek log install C:\ProgramData\Twingate\logs"
             exit 1
           }
-          if ($svc.Status -ne 'Running') {
-            Start-Service -Name "twingate.service" -ErrorAction Stop
-          }
-          Write-Host "✅ Service status: $((Get-Service -Name 'twingate.service').Status)"
 
           Write-Host "⏳ Menunggu IP Twingate (100.x) - maks 5 menit..."
           $tgIP = $null

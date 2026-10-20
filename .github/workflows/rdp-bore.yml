@@ -163,6 +163,13 @@ jobs:
           Write-Host "📱 Cara Menyambung: buka mstsc, masukkan endpoint di atas"
           Write-Host "=====================================`n"
 
+          # Loop keepalive: 355 menit (~5h55m) agar tunnel tetap hidup selama sesi
+          $totalMinutes = 355
+          for ($i = 0; $i -lt $totalMinutes; $i++) {
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Bore ($env:BORE_ENDPOINT)"
+            Start-Sleep -Seconds 60
+          }
+
       - name: 🧹 Cleanup on Cancel/Failure
         if: cancelled() || failure()
         run: |

@@ -14,7 +14,11 @@ ke runner GitHub Actions menggunakan beberapa metode tunneling berbeda.
 | `rdp-cloudflare.yml` | Cloudflare Tunnel | Windows only | Domain + tunnel token | ✅ legacy |
 | `rdp-ngrok.yml` | Ngrok TCP | Windows only | Akun + authtoken | ✅ legacy |
 | `rdp-tailscale.yml` | Tailscale (WireGuard) | Windows only | Akun + auth key | ✅ legacy |
-| `rdp-zerotier.yml` | ZeroTier (mesh VPN) | Windows only | Akun + Network ID | ✅ baru |
+| `rdp-zerotier.yml` | ZeroTier (mesh VPN) | Windows only | Akun + Network ID | ✅ teruji (manual auth) |
+
+> 📌 **Status file lain:** `rdp-bore.yml` (Bore tunnel, nol akun) dan `rdp-twingate.yml`
+> (Twingate connector) sudah ada di repo, tetapi **belum diverifikasi end-to-end** di runner
+> sungguhan — jangan diandalkan sebelum selesai dites.
 
 > ⚠️ **Penting soal input `os`:** **semua** workflow di repo ini sekarang **Windows-only**.
 > Step-nya memakai `shell: pwsh` + registry Windows (`HKLM:`, `New-LocalUser`, `netsh`).

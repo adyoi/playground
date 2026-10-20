@@ -153,7 +153,7 @@ jobs:
         run: |
           Write-Host "`n🎯 === RDP ACCESS INFO (BORE) === 🎯"
           if ($env:BORE_ENDPOINT) {
-            Write-Host "💻 Computer: $($env:BORE_ENDPOINT -split ':' | Select-Object -First 1) (port $($env:BORE_ENDPOINT -split ':' | Select-Object -Last 1))"
+            Write-Host "💻 Computer: $env:BORE_ENDPOINT"
           } else {
             Write-Host "💻 Computer: <endpoint belum terdeteksi; lihat log Bore>"
           }

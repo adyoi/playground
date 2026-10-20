@@ -1,8 +1,10 @@
 name: Playground RDP (adyoi)
 
-# ⚠️ WIP / Eksperimental: menggunakan port forwarding Codespace (gh codespace ports)
-# Prasyarat: ada Codespace yang sudah online (input codespace_name) + GITHUB_TOKEN punya scope codespace.
-#            (Default repo token biasanya sudah cukup; periksa jika am gagal di `gh codespace ssh`.)
+# ⚠️ WIP / Eksperimental.
+# Alur: pwsh (windows-latest) -> wsl (bash) -> gh codespace (port-forwarding) -> xrdp -> RDP
+# Prasyarat:
+#   - Codespace sudah online (input codespace_name)
+#   - Secret GH_CODESPA_TOKEN = PAT classic dengan scope `codespace` (+ `repo` untuk repo privat)
 
 on:
   workflow_dispatch:
@@ -37,23 +39,45 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_CODESPA_TOKEN || github.token }}
       GH_PROMPT_DISABLED: 1
       GH_NO_UPDATE_NOTIFIER: 1
+      CODESPACE: ${{ github.event.inputs.codespace_name }}
     defaults:
       run:
         shell: pwsh
     steps:
       - name: 📋 Display Configuration Info
-        env:
-          CODESPACE: ${{ github.event.inputs.codespace_name }}
         run: |
-          Write-Host "=== PLAYGROUND RDP (CODESPACE) ==="
-          Write-Host "Repo: ${{ github.repository }}"
-          Write-Host "Run ID: ${{ github.run_id }}"
-          Write-Host "Codespace: $CODESPACE"
+          Write-Host "=== PLAYGROUND RDP (adyoi - Codespace) ==="
+          Write-Host "Repo      : ${{ github.repository }}"
+          Write-Host "Run ID    : ${{ github.run_id }}"
+          Write-Host "Runner    : ${{ github.event.inputs.os }}"
+          Write-Host "Codespace : $env:CODESPACE"
+          Write-Host "==================================="
 
-      - name: 👤 Setup RDP User (di Codespace)
+      - name: 🐧 Siapkan WSL + gh
+        run: |
+          Write-Host "🐧 Mengecek WSL..."
+          $wslInfo = wsl --status 2>&1 | Out-String
+          Write-Host $wslInfo
+          $distros = wsl -l -q 2>&1 | Out-String
+          Write-Host "Distro tersedia: $distros"
+          if (-not $distros.Trim()) {
+            Write-Error "❌ WSL tidak tersedia di runner ini."
+            exit 1
+          }
+          # Cek gh di dalam WSL
+          $hasGh = (wsl bash -c "command -v gh >/dev/null 2>&1 && echo yes" 2>&1 | Out-String).Trim()
+          if ($hasGh -eq "yes") {
+            Write-Host "✅ gh tersedia di WSL"
+            "GH_IN_WSL=native" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
+          } else {
+            Write-Host "⚠️ gh tidak ada di WSL -> pakai gh.exe Windows via /mnt/c"
+            "GH_IN_WSL=windows" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
+          }
+          Write-Host "--- test bash + env ---"
+          wsl bash -c "uname -a; echo GH_TOKEN_set=`$( [ -n `"`$GH_TOKEN`" ] && echo yes || echo no )"
+
+      - name: 👤 Setup RDP User + xrdp (di Codespace)
         id: create-user
-        env:
-          CODESPACE: ${{ github.event.inputs.codespace_name }}
         run: |
           $pass = $null
           $customPass = "${{ github.event.inputs.custom_password }}"
@@ -69,67 +93,84 @@ jobs:
             $rawPassword += ($charSet.Special | Get-Random -Count 4)
             $pass = -join ($rawPassword | Sort-Object { Get-Random })
           }
-          $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
           Write-Host "Password diciptakan: $pass"
-          # Simpan password di GITHUB_OUTPUT
           "RDP_PASSWORD=$pass" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Encoding utf8
 
-          # Jalankan setup user + xrdp di dalam codespace via SSH
-          gh codespace ssh -c "$CODESPACE" -R ${{ github.repository }} -- "uname -a; sudo apt-get update -qq; sudo apt-get install -y -qq xrdp;"
-
-      - name: 🔌 Setup xrdp & Port Exposure
-        env:
-          CODESPACE: ${{ github.event.inputs.codespace_name }}
-        run: |
-          Write-Host "🔌 Setup xrdp + expose 3389 di codespace..."
-          # pastikan codespace online & port tersedia
-          gh codespace ports visibility 3389:public --codespace "$CODESPACE" 2>&1 | Out-Null || Write-Warning "⚠️ Visibility mungkin perlu token codespace; cek GITHUB_TOKEN scopes."
-
-      - name: ✅ Verify xrdp Listening
-        env:
-          CODESPACE: ${{ github.event.inputs.codespace_name }}
-        run: |
-          Write-Host "🔍 Verifying xrdp listening on 3389..."
-          $test = gh codespace ssh -c "$CODESPACE" -- "pgrep xrdp && echo OK || echo FAIL" 2>&1
-          if ($test -match 'OK') {
-            Write-Host "✅ xrdp running on 3389"
+          # Tentukan perintah gh di dalam WSL
+          if ($env:GH_IN_WSL -eq "native") {
+            $ghCmd = "gh"
           } else {
-            Write-Error "❌ xrdp belum jalan"
+            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
+          }
+          $remote = "uname -a; sudo apt-get update -qq; sudo apt-get install -y -qq xrdp; sudo systemctl enable xrdp; sudo systemctl start xrdp; echo SETUP_OK"
+          Write-Host "🔗 Menjalankan setup via WSL -> gh codespace ssh..."
+          $out = wsl bash -c "$ghCmd codespace ssh -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY' -- '$remote'" 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch 'SETUP_OK') {
+            Write-Error "❌ Setup di codespace gagal (SETUP_OK tidak ditemukan)."
             exit 1
           }
 
-      - name: 📋 Display RDP Access Info (Codespace)
-        env:
-          CODESPACE: ${{ github.event.inputs.codespace_name }}
+      - name: 🔌 Port Forwarding (expose 3389)
         run: |
-          Write-Host "`n🎯 === RDP ACCESS INFO (CODESPACE) === 🎯"
-          Write-Host "💻 Codespace: $CODESPACE"
-          Write-Host "🌐 Browse URL (HTTP): https://$CODESPACE-3389.app.github.dev"
-          Write-Host "👤 Username: rdpuser"
-          $pwd = ((Get-Content "$env:GITHUB_OUTPUT" -Raw) -split '`n' | Where-Object { $_ -like '*RDP_PASSWORD*' }).Split('=')[1]
-          Write-Host "🔑 Password: $pwd"
-          Write-Host "==============================="
-          Write-Host "📱 Cara Menyambung:"
-          Write-Host "  A) local forward (disarankan):"
-          Write-Host "     gh codespace ports forward 3389:3389 -c $CODESPACE"
-          Write-Host "     lalu mstsc localhost:3389"
-          Write-Host "  B) (remote) Buka https://$CODESPACE-3389.app.github.dev (hanya HTTP)"
-          Write-Host "=====================================`n"
+          if ($env:GH_IN_WSL -eq "native") {
+            $ghCmd = "gh"
+          } else {
+            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
+          }
+          Write-Host "🔌 Expose port 3389 sebagai public di codespace $env:CODESPACE..."
+          $vis = wsl bash -c "$ghCmd codespace ports visibility 3389:public -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY'" 2>&1 | Out-String
+          Write-Host $vis
+          $ports = wsl bash -c "$ghCmd codespace ports -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY' --json sourcePort,browseUrl,visibility" 2>&1 | Out-String
+          Write-Host "--- ports ---"
+          Write-Host $ports
+          "PORTS_JSON=$ports" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
 
-          # Keepalive 355 menit agar codespace tetap hidup
+      - name: ✅ Verify xrdp Listening
+        run: |
+          if ($env:GH_IN_WSL -eq "native") {
+            $ghCmd = "gh"
+          } else {
+            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
+          }
+          Write-Host "🔍 Verifikasi xrdp di codespace..."
+          $chk = wsl bash -c "$ghCmd codespace ssh -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY' -- 'pgrep -x xrdp >/dev/null && echo XRDP_OK || echo XRDP_FAIL'" 2>&1 | Out-String
+          Write-Host $chk
+          if ($chk -notmatch 'XRDP_OK') {
+            Write-Error "❌ xrdp tidak berjalan di codespace."
+            exit 1
+          }
+          Write-Host "✅ xrdp running, port 3389 siap."
+
+      - name: 📋 Display RDP Access Info
+        run: |
+          Write-Host "`n🎯 === RDP ACCESS INFO (adyoi) === 🎯"
+          Write-Host "💻 Codespace : $env:CODESPACE"
+          Write-Host "🌐 Public URL : https://$env:CODESPACE-3389.app.github.dev"
+          Write-Host "👤 Username  : <user linux yang dibuat di codespace>"
+          Write-Host "🔑 Password  : ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "======================================"
+          Write-Host "📱 Cara menyambung dari PC Windows:"
+          Write-Host "   1) Terminal: gh codespace ports forward 3389:3389 -c $env:CODESPACE"
+          Write-Host "   2) mstsc    : localhost:3389"
+          Write-Host "=======================================`n"
+
+          # Keepalive 355 menit
           $totalMinutes = 355
           for ($i = 0; $i -lt $totalMinutes; $i++) {
-            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Codespace ($CODESPACE)"
+            Write-Host "🟢 [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active via Codespace ($env:CODESPACE)"
             Start-Sleep -Seconds 60
           }
 
       - name: 🧹 Cleanup on Cancel/Failure
         if: cancelled() || failure()
-        env:
-          CODESPACE: ${{ github.event.inputs.codespace_name }}
         run: |
-          Write-Host "🧹 Cleanup Codespace (informasi)..."
-          gh codespace stop -c "$CODESPACE" 2>&1 | Out-Null
-          Write-Host "ℹ️ Ketik `"gh codespace stop -c $CODESPACE`" untuk stop manual."
-          Write-Host "   Atau `"gh codespace delete -c $CODESPACE`" untuk hapus."
+          Write-Host "🧹 Cleanup info..."
+          if ($env:GH_IN_WSL -eq "native") {
+            $ghCmd = "gh"
+          } else {
+            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
+          }
+          wsl bash -c "$ghCmd codespace stop -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY'" 2>&1 | Out-Null
+          Write-Host "ℹ️ Codespace di-stop. Hapus manual: gh codespace delete -c $env:CODESPACE"
           Write-Host "✅ Cleanup completed"

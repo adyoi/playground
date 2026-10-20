@@ -35,6 +35,8 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GH_CODESPA_TOKEN || github.token }}
       GH_TOKEN: ${{ secrets.GH_CODESPA_TOKEN || github.token }}
+      GH_PROMPT_DISABLED: 1
+      GH_NO_UPDATE_NOTIFIER: 1
     defaults:
       run:
         shell: pwsh
@@ -73,7 +75,7 @@ jobs:
           "RDP_PASSWORD=$pass" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Encoding utf8
 
           # Jalankan setup user + xrdp di dalam codespace via SSH
-          gh codespace ssh -c "$CODESPACE" -- "uname -a; sudo apt-get update -qq; sudo apt-get install -y -qq xrdp;"
+          gh codespace ssh -c "$CODESPACE" -R ${{ github.repository }} -- "uname -a; sudo apt-get update -qq; sudo apt-get install -y -qq xrdp;"
 
       - name: 🔌 Setup xrdp & Port Exposure
         env:

@@ -1,10 +1,11 @@
 name: Playground RDP (adyoi)
 
 # ⚠️ WIP / Eksperimental.
-# Alur: pwsh (windows-latest) -> wsl (bash) -> gh codespace (port-forwarding) -> xrdp -> RDP
+# Alur: pwsh (windows-latest) -> gh codespace ssh (install xrdp) -> port forwarding 3389 -> RDP
 # Prasyarat:
 #   - Codespace sudah online (input codespace_name)
-#   - Secret GH_CODESPA_TOKEN = PAT classic dengan scope `codespace` (+ `repo` untuk repo privat)
+#   - Secret GH_CODESPA_TOKEN = PAT classic dengan scope `codespace`
+# CATATAN: gh codespace ssh TIDAK boleh pakai -c dan -R bersamaan (group flag eksklusif).
 
 on:
   workflow_dispatch:
@@ -53,28 +54,17 @@ jobs:
           Write-Host "Codespace : $env:CODESPACE"
           Write-Host "==================================="
 
-      - name: 🐧 Siapkan WSL + gh
+      - name: 🔍 Cek Codespace
         run: |
-          Write-Host "🐧 Mengecek WSL..."
-          $wslInfo = wsl --status 2>&1 | Out-String
-          Write-Host $wslInfo
-          $distros = wsl -l -q 2>&1 | Out-String
-          Write-Host "Distro tersedia: $distros"
-          if (-not $distros.Trim()) {
-            Write-Error "❌ WSL tidak tersedia di runner ini."
+          Write-Host "🔍 Memeriksa codespace $env:CODESPACE..."
+          $list = gh codespace list --json name,state,displayName 2>&1 | Out-String
+          Write-Host $list
+          $match = $list | ConvertFrom-Json | Where-Object { $_.name -eq $env:CODESPACE }
+          if (-not $match) {
+            Write-Error "❌ Codespace '$env:CODESPACE' tidak ditemukan. Cek juga scope token (harus ada 'codespace')."
             exit 1
           }
-          # Cek gh di dalam WSL
-          $hasGh = (wsl bash -c "command -v gh >/dev/null 2>&1 && echo yes" 2>&1 | Out-String).Trim()
-          if ($hasGh -eq "yes") {
-            Write-Host "✅ gh tersedia di WSL"
-            "GH_IN_WSL=native" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
-          } else {
-            Write-Host "⚠️ gh tidak ada di WSL -> pakai gh.exe Windows via /mnt/c"
-            "GH_IN_WSL=windows" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
-          }
-          Write-Host "--- test bash + env ---"
-          wsl bash -c "uname -a; echo GH_TOKEN_set=`$( [ -n `"`$GH_TOKEN`" ] && echo yes || echo no )"
+          Write-Host "✅ Codespace ditemukan. State: $($match.state)"
 
       - name: 👤 Setup RDP User + xrdp (di Codespace)
         id: create-user
@@ -96,15 +86,10 @@ jobs:
           Write-Host "Password diciptakan: $pass"
           "RDP_PASSWORD=$pass" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Encoding utf8
 
-          # Tentukan perintah gh di dalam WSL
-          if ($env:GH_IN_WSL -eq "native") {
-            $ghCmd = "gh"
-          } else {
-            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
-          }
+          # Setup user + xrdp di dalam codespace (perintah jalan di sisi codespace/Linux)
           $remote = "uname -a; sudo apt-get update -qq; sudo apt-get install -y -qq xrdp; sudo systemctl enable xrdp; sudo systemctl start xrdp; echo SETUP_OK"
-          Write-Host "🔗 Menjalankan setup via WSL -> gh codespace ssh..."
-          $out = wsl bash -c "$ghCmd codespace ssh -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY' -- '$remote'" 2>&1 | Out-String
+          Write-Host "🔗 Menjalankan setup via gh codespace ssh..."
+          $out = gh codespace ssh -c "$env:CODESPACE" -- $remote 2>&1 | Out-String
           Write-Host $out
           if ($out -notmatch 'SETUP_OK') {
             Write-Error "❌ Setup di codespace gagal (SETUP_OK tidak ditemukan)."
@@ -113,28 +98,17 @@ jobs:
 
       - name: 🔌 Port Forwarding (expose 3389)
         run: |
-          if ($env:GH_IN_WSL -eq "native") {
-            $ghCmd = "gh"
-          } else {
-            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
-          }
           Write-Host "🔌 Expose port 3389 sebagai public di codespace $env:CODESPACE..."
-          $vis = wsl bash -c "$ghCmd codespace ports visibility 3389:public -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY'" 2>&1 | Out-String
+          $vis = gh codespace ports visibility 3389:public -c "$env:CODESPACE" 2>&1 | Out-String
           Write-Host $vis
-          $ports = wsl bash -c "$ghCmd codespace ports -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY' --json sourcePort,browseUrl,visibility" 2>&1 | Out-String
+          $ports = gh codespace ports -c "$env:CODESPACE" --json sourcePort,browseUrl,visibility 2>&1 | Out-String
           Write-Host "--- ports ---"
           Write-Host $ports
-          "PORTS_JSON=$ports" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
 
       - name: ✅ Verify xrdp Listening
         run: |
-          if ($env:GH_IN_WSL -eq "native") {
-            $ghCmd = "gh"
-          } else {
-            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
-          }
           Write-Host "🔍 Verifikasi xrdp di codespace..."
-          $chk = wsl bash -c "$ghCmd codespace ssh -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY' -- 'pgrep -x xrdp >/dev/null && echo XRDP_OK || echo XRDP_FAIL'" 2>&1 | Out-String
+          $chk = gh codespace ssh -c "$env:CODESPACE" -- "pgrep -x xrdp >/dev/null && echo XRDP_OK || echo XRDP_FAIL" 2>&1 | Out-String
           Write-Host $chk
           if ($chk -notmatch 'XRDP_OK') {
             Write-Error "❌ xrdp tidak berjalan di codespace."
@@ -166,11 +140,6 @@ jobs:
         if: cancelled() || failure()
         run: |
           Write-Host "🧹 Cleanup info..."
-          if ($env:GH_IN_WSL -eq "native") {
-            $ghCmd = "gh"
-          } else {
-            $ghCmd = "'/mnt/c/Program Files/GitHub CLI/gh.exe'"
-          }
-          wsl bash -c "$ghCmd codespace stop -c '$env:CODESPACE' -R '$env:GITHUB_REPOSITORY'" 2>&1 | Out-Null
+          gh codespace stop -c "$env:CODESPACE" 2>&1 | Out-Null
           Write-Host "ℹ️ Codespace di-stop. Hapus manual: gh codespace delete -c $env:CODESPACE"
           Write-Host "✅ Cleanup completed"

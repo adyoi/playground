@@ -84,8 +84,19 @@ jobs:
             sudo apt-get update -qq; sudo apt-get install -y -qq curl wget
             wget -q -O /tmp/anydesk.deb https://download.anydesk.com/linux/anydesk_6.4.0-1_amd64.deb || Write-Host "⚠️ Download gagal — butuh manual/download mirror."
             sudo dpkg -i /tmp/anydesk.deb 2>&1 | Out-String | Write-Host || sudo apt-get install -f -y -qq
+            # Auto-capture AnyDesk ID
+            $id = sudo anydesk --get-id 2>&1 | Out-String | Select-Object -First 1 | ForEach-Object { $_.Trim() }
+            if ($id -match '^\d+$') { "ANYDESK_ID=$id" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8; "ANYDESK_ID=$id" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Encoding utf8; Write-Host "✅ AnyDesk ID (Linux): $id" } else { Write-Host "⚠️ Gagal membaca AnyDesk ID di Linux." }
           } else {
-            Write-Host "⚠️ Windows runner: AnyDesk MSI membutuhkan download manual atau enterprise deployment."
+            $tmp = "$env:TEMP\AnyDesk.exe"
+            Write-Host "📥 Download AnyDesk Windows..."
+            Invoke-WebRequest -Uri "https://download.anydesk.com/AnyDesk.exe" -OutFile $tmp -UseBasicParsing 2>&1 | Out-Null
+            Write-Host "📦 Install AnyDesk (silent)..."
+            Start-Process -FilePath $tmp -ArgumentList "/S" -Wait 2>&1 | Out-String | Write-Host
+            $exePath = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
+            if (-Not (Test-Path $exePath)) { $exePath = "C:\Program Files\AnyDesk\AnyDesk.exe" }
+            $id = (& $exePath --get-id 2>&1 | Out-String).Trim()
+            if ($id -match '^\d+$') { "ANYDESK_ID=$id" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8; "ANYDESK_ID=$id" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Encoding utf8; Write-Host "✅ AnyDesk ID (Windows): $id" } else { Write-Host "⚠️ Gagal membaca AnyDesk ID di Windows ($exePath)." }
           }
           # Verify daemon
           $chk = sudo systemctl status anydesk --no-pager 2>&1 | Out-String
@@ -116,7 +127,12 @@ jobs:
         run: |
           Write-Host "🎯 === RDP ACCESS INFO (AnyDesk) ==="
           Write-Host "💻 Mechanism: ${{ github.event.inputs.mechanism }}"
-          Write-Host "🔑 AnyDesk ID/Account: $env:ANYDESK_ID (jika di-set)"
+          $anydeskId = $env:ANYDESK_ID
+          if ($anydeskId) {
+            Write-Host "🔑 AnyDesk ID (otomatis): $anydeskId"
+          } else {
+            Write-Host "🔑 AnyDesk ID: belum terdeteksi (cek log install / input anydesk_id)"
+          }
           Write-Host "👤 Password  : ${{ steps.create-user.outputs.RDP_PASSWORD }}"
           Write-Host "=========================================="
           Write-Host "⚠️ Tradeoff: Proprietary software, butuh akun, free-tier terbatas. Tidak memerlukan VPS/infrastruktur tambahan selain runner."

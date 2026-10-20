@@ -18,6 +18,11 @@ on:
         description: 'Custom RDP password (opsional)'
         required: false
         type: string
+      apt_mirror:
+        description: 'Host APT mirror untuk WSL Debian (mis. deb.debian.org, mirror.komputa.id, mirror.its.ac.id)'
+        required: false
+        type: string
+        default: 'deb.debian.org'
       os:
         description: 'Runner OS image'
         required: true
@@ -54,21 +59,82 @@ jobs:
           Write-Host "Codespace : $env:CODESPACE"
           Write-Host "==================================="
 
-      - name: 🐧 Cek WSL (prasyarat opsional)
+      - name: 🐧 Cek / Update / Install WSL
         run: |
-          Write-Host "🐧 Mengecek WSL di runner $env:RUNNER_OS ..."
+          Write-Host "🐧 WSL --update ..."
+          wsl --update 2>&1 | Out-String | Write-Host
           $status = wsl --status 2>&1 | Out-String
           Write-Host $status
           $distros = wsl -l -q 2>&1 | Out-String
-          Write-Host "Distro WSL tersedia: $distros"
+          Write-Host "Distro WSL: $distros"
           if ($distros.Trim()) {
             $distro = ($distros.Trim() -split "`n")[0].Trim()
             Write-Host "✅ WSL tersedia ($distro)."
             "GH_IN_WSL=$distro" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
           } else {
-            Write-Host "⚠️ WSL tidak tersedia di runner ini (normal untuk windows-latest hosted)."
-            Write-Host "   Workflow akan lanjut dengan native pwsh + gh."
-            "GH_IN_WSL=none" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
+            Write-Host "⚠️ Tidak ada distro WSL -> coba: wsl --install Debian --no-launch"
+            $inst = wsl --install Debian --no-launch 2>&1 | Out-String
+            Write-Host $inst
+            Start-Sleep -Seconds 15
+            $distros = wsl -l -q 2>&1 | Out-String
+            if ($distros.Trim()) {
+              $distro = ($distros.Trim() -split "`n")[0].Trim()
+              Write-Host "✅ Debian terinstall ($distro)."
+              "GH_IN_WSL=$distro" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
+              # Initialize root (skip interactive first-run)
+              wsl -d $distro -u root -e bash -lc "true" 2>&1 | Out-String | Write-Host
+            } else {
+              Write-Host "⚠️ WSL install gagal (normal untuk hosted runner tanpa virtualisasi)."
+              Write-Host "   Lanjut dengan native pwsh + gh saja."
+              "GH_IN_WSL=none" | Out-File -FilePath "$env:GITHUB_ENV" -Encoding utf8
+            }
+          }
+
+      - name: 🌐 Setting Network Mirror (APT)
+        if: env.GH_IN_WSL != 'none'
+        run: |
+          $distro = $env:GH_IN_WSL
+          $mirror = "${{ github.event.inputs.apt_mirror }}"
+          if (-not $mirror) { $mirror = "deb.debian.org" }
+          $mirror = ($mirror -replace '^https?://','') -replace '/+$',''
+          Write-Host "🌐 APT mirror -> $mirror (distro: $distro)"
+          $script = @'
+set -e
+MIRROR="${MIRROR_HOST}"
+SUITE="${SUITE_NAME:-bookworm}"
+if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+  cp -n /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak 2>/dev/null || true
+  {
+    printf 'Types: deb\n'
+    printf 'URIs: http://%s/debian\n' "$MIRROR"
+    printf 'Suites: %s %s-updates\n' "$SUITE" "$SUITE"
+    printf 'Components: main contrib non-free non-free-firmware\n'
+    printf 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n'
+    printf 'Types: deb\n'
+    printf 'URIs: http://%s/debian-security\n' "$MIRROR"
+    printf 'Suites: %s-security\n' "$SUITE"
+    printf 'Components: main contrib non-free non-free-firmware\n'
+    printf 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n'
+  } > /etc/apt/sources.list.d/debian.sources
+  echo "MODE=deb822"
+else
+  cp -n /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null || true
+  {
+    printf 'deb http://%s/debian %s %s-updates main contrib non-free non-free-firmware\n' "$MIRROR" "$SUITE" "$SUITE"
+    printf 'deb http://%s/debian-security %s-security main contrib non-free non-free-firmware\n' "$MIRROR" "$SUITE"
+  } > /etc/apt/sources.list
+  echo "MODE=classic"
+fi
+apt-get update -qq
+echo MIRROR_OK
+'@
+          $script | wsl -d $distro -u root -e tee /tmp/apt-mirror.sh 2>&1 | Out-String | Write-Host
+          $res = wsl -d $distro -u root -e env "MIRROR_HOST=$mirror" "SUITE_NAME=bookworm" bash /tmp/apt-mirror.sh 2>&1 | Out-String
+          Write-Host $res
+          if ($res -notmatch 'MIRROR_OK') {
+            Write-Host "⚠️ Setting mirror gagal (lanjut dengan konfigurasi default)."
+          } else {
+            Write-Host "✅ APT mirror siap: $mirror"
           }
 
       - name: 🔍 Cek Codespace

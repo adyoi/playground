@@ -99,35 +99,35 @@ jobs:
           $mirror = ($mirror -replace '^https?://','') -replace '/+$',''
           Write-Host "🌐 APT mirror -> $mirror (distro: $distro)"
           $script = @'
-set -e
-MIRROR="${MIRROR_HOST}"
-SUITE="${SUITE_NAME:-bookworm}"
-if [ -f /etc/apt/sources.list.d/debian.sources ]; then
-  cp -n /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak 2>/dev/null || true
-  {
-    printf 'Types: deb\n'
-    printf 'URIs: http://%s/debian\n' "$MIRROR"
-    printf 'Suites: %s %s-updates\n' "$SUITE" "$SUITE"
-    printf 'Components: main contrib non-free non-free-firmware\n'
-    printf 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n'
-    printf 'Types: deb\n'
-    printf 'URIs: http://%s/debian-security\n' "$MIRROR"
-    printf 'Suites: %s-security\n' "$SUITE"
-    printf 'Components: main contrib non-free non-free-firmware\n'
-    printf 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n'
-  } > /etc/apt/sources.list.d/debian.sources
-  echo "MODE=deb822"
-else
-  cp -n /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null || true
-  {
-    printf 'deb http://%s/debian %s %s-updates main contrib non-free non-free-firmware\n' "$MIRROR" "$SUITE" "$SUITE"
-    printf 'deb http://%s/debian-security %s-security main contrib non-free non-free-firmware\n' "$MIRROR" "$SUITE"
-  } > /etc/apt/sources.list
-  echo "MODE=classic"
-fi
-apt-get update -qq
-echo MIRROR_OK
-'@
+          set -e
+          MIRROR="${MIRROR_HOST}"
+          SUITE="${SUITE_NAME:-bookworm}"
+          if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+            cp -n /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak 2>/dev/null || true
+            {
+              printf 'Types: deb\n'
+              printf 'URIs: http://%s/debian\n' "$MIRROR"
+              printf 'Suites: %s %s-updates\n' "$SUITE" "$SUITE"
+              printf 'Components: main contrib non-free non-free-firmware\n'
+              printf 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n'
+              printf 'Types: deb\n'
+              printf 'URIs: http://%s/debian-security\n' "$MIRROR"
+              printf 'Suites: %s-security\n' "$SUITE"
+              printf 'Components: main contrib non-free non-free-firmware\n'
+              printf 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n'
+            } > /etc/apt/sources.list.d/debian.sources
+            echo "MODE=deb822"
+          else
+            cp -n /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null || true
+            {
+              printf 'deb http://%s/debian %s %s-updates main contrib non-free non-free-firmware\n' "$MIRROR" "$SUITE" "$SUITE"
+              printf 'deb http://%s/debian-security %s-security main contrib non-free non-free-firmware\n' "$MIRROR" "$SUITE"
+            } > /etc/apt/sources.list
+            echo "MODE=classic"
+          fi
+          apt-get update -qq
+          echo MIRROR_OK
+          '@
           $script | wsl -d $distro -u root -e tee /tmp/apt-mirror.sh 2>&1 | Out-String | Write-Host
           $res = wsl -d $distro -u root -e env "MIRROR_HOST=$mirror" "SUITE_NAME=bookworm" bash /tmp/apt-mirror.sh 2>&1 | Out-String
           Write-Host $res

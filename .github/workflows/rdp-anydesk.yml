@@ -1,0 +1,131 @@
+name: Playground RDP (AnyDesk)
+
+# ⚠️ WIP — Riset / Rancangan
+# Alur: pwsh → install AnyDesk (proprietary) → establish session → verify → cleanup
+# Prasyarat / Tradeoff (wajib disebut):
+#   - AnyDesk = proprietary; butuh akun + session ID untuk remote
+#   - Free untuk personal use; unattended access butuh license (tradeoff jelas)
+#   - Instalasi via .deb (Linux) atau .msi (Windows)
+#   - Tidak butuh VPS ekstra (bisa di runner / codespace langsung)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mechanism:
+        description: 'Mechanism: direct (runner) atau codespace (codespace)' 
+        required: true
+        type: choice
+        options: [direct, codespace]
+        default: direct
+      codespace_name:
+        description: 'Codespace (jika mechanism=codespace)'
+        required: false
+        type: string
+      custom_password:
+        description: 'Custom RDP/AnyDesk password'
+        required: false
+        type: string
+      os:
+        description: 'Runner OS'
+        required: true
+        type: choice
+        options: [windows-latest, ubuntu-latest]
+        default: ubuntu-latest
+      anydesk_id:
+        description: 'AnyDesk ID session / account identifier (opsional)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: ${{ github.event.inputs.os }}
+    timeout-minutes: 3600
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
+      GH_PROMPT_DISABLED: 1
+      ANYDESK_ID: ${{ github.event.inputs.anydesk_id }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 📋 Display Config
+        run: |
+          Write-Host "=== PLAYGROUND RDP (AnyDesk) ==="
+          Write-Host "Mechanism: ${{ github.event.inputs.mechanism }}"
+          Write-Host "Runner   : ${{ github.event.inputs.os }}"
+          Write-Host "Repo     : ${{ github.repository }}"
+          Write-Host "Tradeoff : Proprietary (AnyDesk) — butuh akun; tidak mewajibkan VPS/infrastruktur tambahan."
+          Write-Host "======================================="
+
+      - name: 🐧 Setup RDP User
+        id: create-user
+        run: |
+          $pass = "${{ github.event.inputs.custom_password }}"
+          if (-not $pass) {
+            Add-Type -AssemblyName System.Security
+            $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+            $rawPassword = @()
+            $rawPassword += ($charSet.Upper | Get-Random -Count 4)
+            $rawPassword += ($charSet.Lower | Get-Random -Count 4)
+            $rawPassword += ($charSet.Number | Get-Random -Count 4)
+            $rawPassword += ($charSet.Special | Get-Random -Count 4)
+            $pass = -join ($rawPassword | Sort-Object { Get-Random })
+          }
+          Write-Host "Password: $pass"
+          "RDP_PASSWORD=$pass" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Encoding utf8
+
+      - name: 📦 Install AnyDesk
+        run: |
+          Write-Host "📦 Menginstall AnyDesk (proprietary)..."
+          if ($env:RUNNER_OS -match "Linux") {
+            sudo apt-get update -qq; sudo apt-get install -y -qq curl wget
+            wget -q -O /tmp/anydesk.deb https://download.anydesk.com/linux/anydesk_6.4.0-1_amd64.deb || Write-Host "⚠️ Download gagal — butuh manual/download mirror."
+            sudo dpkg -i /tmp/anydesk.deb 2>&1 | Out-String | Write-Host || sudo apt-get install -f -y -qq
+          } else {
+            Write-Host "⚠️ Windows runner: AnyDesk MSI membutuhkan download manual atau enterprise deployment."
+          }
+          # Verify daemon
+          $chk = sudo systemctl status anydesk --no-pager 2>&1 | Out-String
+          Write-Host $chk
+
+      - name: 🔌 Establish AnyDesk Session
+        run: |
+          Write-Host "🔌 AnyDesk session setup..."
+          if ($env:ANYDESK_ID) {
+            Write-Host "ID: $env:ANYDESK_ID"
+          } else {
+            Write-Host "⚠️ ANYDESK_ID tidak di-set — butuh sesi manual atau akun untuk remote."
+          }
+          # Note: AnyDesk unattended access butuh password / account — tidak otomatis tanpa login
+          sudo anydesk --start-service 2>&1 | Out-String | Write-Host || echo "Service start dicoba."
+
+      - name: ✅ Verify AnyDesk Running
+        run: |
+          $chk = sudo anydesk --status 2>&1 | Out-String || echo "Status check completed"
+          Write-Host $chk
+          if ($chk -match "running" -or $chk -match "OK") {
+            Write-Host "✅ AnyDesk aktif."
+          } else {
+            Write-Host "⚠️ AnyDesk belum terkonfirmasi aktif — periksa manual via AnyDesk app."
+          }
+
+      - name: 📋 Display Info
+        run: |
+          Write-Host "🎯 === RDP ACCESS INFO (AnyDesk) ==="
+          Write-Host "💻 Mechanism: ${{ github.event.inputs.mechanism }}"
+          Write-Host "🔑 AnyDesk ID/Account: $env:ANYDESK_ID (jika di-set)"
+          Write-Host "👤 Password  : ${{ steps.create-user.outputs.RDP_PASSWORD }}"
+          Write-Host "=========================================="
+          Write-Host "⚠️ Tradeoff: Proprietary software, butuh akun, free-tier terbatas. Tidak memerlukan VPS/infrastruktur tambahan selain runner."
+          Write-Host "==========================================`n"
+
+      - name: 🧹 Cleanup
+        if: cancelled() || failure()
+        run: |
+          Write-Host "🧹 Cleanup AnyDesk..."
+          sudo systemctl stop anydesk 2>&1 | Out-Null || true
+          sudo apt-get remove -y -qq anydesk 2>&1 | Out-Null || true
+          Write-Host "✅ Cleanup AnyDesk completed"

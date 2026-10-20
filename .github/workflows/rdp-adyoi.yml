@@ -27,7 +27,6 @@ on:
 
 permissions:
   contents: read
-  codespaces: read  # Perlu untuk gh codespace ports / ssh
 
 jobs:
   secure-rdp:

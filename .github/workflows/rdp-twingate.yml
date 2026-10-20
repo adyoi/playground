@@ -101,6 +101,24 @@ jobs:
 
           if ($env:TWINGATE_SERVICE_KEY) {
             Write-Host "🔑 Service key ditemukan -> install headless (service_secret)."
+            # Validasi dulu: service key harus JSON valid dengan field kunci Twingate.
+            $parsed = $null
+            try {
+              $parsed = $env:TWINGATE_SERVICE_KEY | ConvertFrom-Json
+            } catch {
+              Write-Error "❌ TWINGATE_SERVICE_KEY bukan JSON valid: $_"
+              Write-Host "   Secret harus berisi JSON service key lengkap dari Twingate Admin Console."
+              Write-Host "   (Services -> Create Service Key -> salin JSON utuh, bukan token/API key)"
+              exit 1
+            }
+            $props = $parsed.PSObject.Properties.Name
+            Write-Host "   JSON valid. field yang terbaca: $($props -join ', ')"
+            $expected = @('token', 'key', 'network', 'service')
+            $missing = $expected | Where-Object { $props -notcontains $_ }
+            if ($missing.Count -gt 0) {
+              Write-Warning "⚠️ Field service key yang diharapkan tidak ada: $($missing -join ', ')"
+              Write-Warning "   Lihat docs: Twingate Admin Console -> Services -> Service Key (JSON utuh)."
+            }
             $keyPath = "$env:TEMP\twingate_service_key.json"
             [System.IO.File]::WriteAllText($keyPath, $env:TWINGATE_SERVICE_KEY)
             try {
@@ -154,7 +172,23 @@ jobs:
             $wait += 5
           }
           if (-not $started) {
-            Write-Error "❌ Twingate service gagal start setelah $maxRetries retries. Cek log install C:\ProgramData\Twingate\logs"
+            Write-Error "❌ Twingate service gagal start setelah $maxRetries retries."
+            Write-Host "--- Diagnostik ---"
+            Write-Host "1) Log client:"
+            $logDir = "C:\ProgramData\Twingate\logs"
+            if (Test-Path $logDir) {
+              Get-ChildItem $logDir -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 3 |
+                ForEach-Object {
+                  Write-Host "   --- $($_.Name) ---"
+                  Get-Content $_.FullName -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "   $_" }
+                }
+            } else { Write-Host "   (folder log tidak ada)" }
+            Write-Host "2) headless.conf:"
+            $conf = "C:\Program Files\Twingate\headless.conf"
+            if (Test-Path $conf) { Get-Content $conf | ForEach-Object { Write-Host "   $_" } } else { Write-Host "   (tidak ada)" }
+            Write-Host "3) Service config:"
+            & sc.exe qc twingate.service 2>&1 | ForEach-Object { Write-Host "   $_" }
             exit 1
           }
 
